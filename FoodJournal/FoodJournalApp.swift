@@ -1,10 +1,3 @@
-//
-//  FoodJournalApp.swift
-//  FoodJournal
-//
-//  Created by Mike Shaw on 4/30/26.
-//
-
 import SwiftUI
 import SwiftData
 
@@ -12,12 +5,14 @@ import SwiftData
 struct FoodJournalApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            FoodEntry.self,
+            UserGoals.self,
+            CachedFood.self,
+            WaterEntry.self
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try ModelContainer(for: schema, configurations: [config])
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }
@@ -25,7 +20,7 @@ struct FoodJournalApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
         .modelContainer(sharedModelContainer)
     }
