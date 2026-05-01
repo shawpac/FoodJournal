@@ -1,70 +1,88 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.1. Items higher on the list have higher value-per-hour-of-work; items lower down are nice but optional. The ranking inside each section is from your stated priorities, with adjustments where bug fixes make more sense first.
+A pragmatic, ranked plan for what comes after v1.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
-## Next up — small fixes (do these before more features)
+## Next up — small fixes & high-leverage cleanups
 
-These are quick, high-leverage cleanups that will pay off every day you use the app.
+These are the daily-friction items. Small, contained, big payoff.
 
-### Fix the water −8 button
-Currently `logWater(-8)` deletes the most recent entry, which is destructive if that entry was a custom 48 oz log. Change it to always insert a negative entry. Then add a "today's water entries" sheet (tappable from the water card) where you can delete specific entries. Probably 30 minutes of work.
+### "Calories" instead of "kcal"
+One-word find/replace across the app. Trivial.
 
-### Edit an existing food entry
-Right now if you log a chicken sandwich at 1 serving and realize it was 1.5, you have to delete and re-add. Add tap-to-edit on Today tab entries — opens a sheet that lets you change servings count and meal type. Reuse the `RelogSheet` UI we already built. ~30 minutes.
+### Click into and edit any logged entry
+Right now if you log a chicken sandwich at 1 serving and realize it was 1.5, you have to delete and re-add. Tap any entry on Today → opens an edit sheet with all the fields editable. The `RelogSheet` UI we already built is most of the work; this is "open it on an existing entry instead of creating a new one." ~30 min.
+
+### Serving unit dropdown in manual entry
+Currently a free text field. Replace with a picker containing common units (grams, milliliters, ounces, serving, piece, cup, tbsp, tsp, slice) plus a "Custom…" option that opens a text field for unusual cases like "1 burrito." ~20 min.
+
+### Fix the water −8 button (legacy, may already be done)
+Verify this is fixed in current build. Earlier the `-8` button deleted the most recent water entry instead of subtracting 8 oz. The "set total directly" feature replaced this, but check that the legacy quick-tap buttons (if any remain) behave correctly.
 
 ### Better Recents
 Two small improvements:
-1. Show "Last logged: yesterday at 8am" or similar so it's easier to recognize what you're picking
-2. Long-press to delete from recents (in case something embarrassing or one-time gets stuck there)
+1. Show "Last logged: yesterday at 8am" so you can recognize what you're picking
+2. Long-press to delete from recents (in case something one-time gets stuck there)
 
-### Polish small things as you find them
-You'll spot these naturally as you use the app. Examples that are likely to bug you:
-- Numbers should round better in some places (3.0 should display as 3, not 3.0)
-- The barcode scanner doesn't have a clear "tap to scan again" if it misreads
-- No haptic feedback when you tap +12 oz of water (a little tap would feel right)
+### Polish that emerges from real use
+You'll spot these as you use the app. Examples:
+- Numbers should round better (3.0 → 3, not 3.0)
+- Barcode scanner needs a clear "tap to scan again" if it misreads
+- Haptic feedback on logging actions
 
 ---
 
 ## Tier 1 — Will improve daily use most
 
-### Search by name (USDA FoodData Central)
-For fresh produce and whole foods that don't have barcodes — apples, chicken breast, broccoli. USDA has a free API with ~400k foods. Add a "Search" option on the Add tab. Hardest part is dealing with their multiple "branded" / "foundation" / "survey" food types and picking sensible defaults.
+### Meal grouping on Today (Breakfast / Lunch / Dinner / Snack)
+Today tab currently shows one flat list of entries. Group by meal type with running subtotals per meal. Helps you see what's eating your calorie budget. The `mealType` field already exists on every entry — pure UI work. ~30 min.
 
-Roughly 1-2 hours to a working v1. Can be polished later.
+### Edit logged-entry's full nutrient set
+Extension of "click into and edit any logged entry" above — if the entry has all 19 nutrient fields filled (e.g., from a photo estimate), the edit sheet should let you adjust all of them, not just servings.
 
-### Weekly trends chart
-A new tab (or pull-up sheet from Today) that shows last 7 days: calories, each macro, water, all on small line charts. Apple's `Charts` framework makes this surprisingly fast to build. Useful for noticing patterns ("oh, weekends are way over goal").
+### Search by name + persistent food library
+Combines two of Mike's asks: a USDA-backed search for fresh foods (so you can log "apple" without barcode hunting) AND a personal library of every unique food you've previously logged. One unified search that hits local first, USDA second.
 
-~1 hour using SwiftUI Charts.
+Implementation: when you log a food, also save a `LibraryFood` record (deduped by name+brand). The Add tab gets a "Search" option that searches the local library, falling back to USDA's free FoodData Central API for unknown items. Picking either fills the Confirm screen.
+
+USDA has ~400k foods. Hardest part is dealing with their multiple food types ("branded" / "foundation" / "survey") and picking sensible defaults. ~2 hours for v1, polish after.
+
+### Trends view (weekly / monthly / custom range averages)
+A new "Trends" tab. Top of the screen has a range selector (Last 7 days / Last 30 days / Custom range). Body shows average daily values for all 19 nutrients + calories + water with the same progress-bar UI as the breakdown sheet.
+
+Critical design choice for averages: only count days that had data for that nutrient. Display as "12 µg Vitamin D — based on 3 of 7 days" so it's clear when an average isn't comprehensive. This preserves the "nil ≠ 0" philosophy from the entry model.
+
+Apple's `Charts` framework also makes line charts easy if you want to see trend over time, not just averages. Probably ~2 hours total.
 
 ### Entry deletion that actually undoes
-Right now swipe-to-delete is permanent. iOS users expect a brief "undo" snackbar at the bottom. Small change but feels much more polished and saves a real "oh shit" moment.
+Right now swipe-to-delete is permanent. iOS users expect a brief "undo" snackbar at the bottom. Saves a real "oh shit" moment when you misclick. ~20 min.
 
 ---
 
 ## Tier 2 — Useful but not urgent
 
+### Export your data to CSV
+"Settings → Export" with a custom-range date picker. Generates a CSV of all entries in range, opens iOS share sheet so you can email/save it. Each row is one logged entry with all 19 nutrient fields as columns. ~30 min.
+
 ### iCloud sync across devices
-Convert SwiftData container to use CloudKit. Your data syncs to your other Apple devices automatically. Comes with edge cases (conflicts, offline, a free Apple ID limits CloudKit usage). Worth doing only if you actually use a second device — iPad, Mac, etc. Probably 1-2 hours including testing.
+Convert SwiftData container to use CloudKit. Data syncs to other Apple devices automatically. Comes with edge cases (conflicts, offline, free Apple ID limits CloudKit usage). Worth doing only if you actually use a second device. ~1-2 hours including testing.
 
 ### Better photo logging
-Several improvements possible:
-- Take photo directly in-app instead of only picking from library
-- Show the photo as a thumbnail on the logged entry so you can see what you ate later
+- Take photo directly in-app instead of only library
+- Show photo as a thumbnail on the logged entry
 - Re-prompt Claude with "are you sure?" if confidence is low
-- Cache the photo locally so you can look at history later
+- Cache photo locally so you can review history
 - Multi-photo support — sometimes one angle isn't enough
 
-### Meal grouping on Today
-Right now everything is one flat list. Group by Breakfast / Lunch / Dinner / Snack with running subtotals per meal. Helps you see what's eating your calorie budget. ~30 min.
-
 ### Notification reminders
-Optional reminder to log dinner at 8pm if you haven't logged anything in 4 hours, etc. Apple's `UserNotifications` framework. Get this wrong and it's annoying — get it right and you actually use the app daily. Worth experimenting with.
+Optional reminder to log dinner at 8pm if you haven't logged anything in 4 hours. Apple's `UserNotifications` framework. Get this wrong and it's annoying — get it right and you actually use the app daily.
 
 ### Smart auto-fill defaults
-If you eat the same breakfast every weekday, the app should know that. After 2 weeks of data, suggest "Log your usual?" Tier 3 ML, but you can do a basic version in 30 min by just looking at "what did the user log between 7-10am yesterday."
+If you eat the same breakfast every weekday, the app should know that. After 2 weeks of data, suggest "Log your usual?" Tier 3 ML eventually, but a basic version is just "what did the user log between 7-10am yesterday."
+
+### Goals UI for all 19 nutrients
+Currently Settings only exposes calories/protein/carbs/fat/water. The other 14 nutrient goals are stored with sensible defaults but not editable. Add a "More goals" section.
 
 ---
 
@@ -72,40 +90,39 @@ If you eat the same breakfast every weekday, the app should know that. After 2 w
 
 ### UI polish across the board
 - Custom app icon
-- Animated number transitions (your calorie ring smoothly counting up when you add an entry)
+- Animated number transitions (calorie ring smoothly counting up when you add an entry)
 - Better empty states with illustrations
-- Dark mode tuning (the app inherits system dark mode but some colors could be tweaked)
-- Custom typography — the app is very system-default right now, has room for personality
+- Dark mode tuning
+- Custom typography — currently very system-default
 
 ### Macros breakdown by meal
-Show how each macro is distributed across breakfast/lunch/dinner. Helps with timing (e.g., "I keep eating 80% of my carbs at dinner").
+Show how each macro is distributed across breakfast/lunch/dinner. Helps with timing ("I keep eating 80% of my carbs at dinner").
 
 ### Weight tracking
-Stretch goal — you mentioned in v1 planning that exercise + weight wasn't a priority, but a simple weight log tab is easy to add and pairs well with the trends chart.
-
-### Export your data
-A "Settings → Export" button that emails you a CSV of all your entries. Handy if you ever want to migrate or share with a nutritionist. ~20 min.
+Stretch goal — simple weight log tab. Pairs well with the trends view.
 
 ### Apple Health integration
-Two-way sync with Apple Health — Health gets your calorie/macro/water totals, you get weight and exercise from Health. Lots of edge cases but unlocks the "real" iOS experience. Probably 2-3 hours.
+Two-way sync with Apple Health — Health gets your calorie/macro/water totals, you get weight and exercise from Health. Lots of edge cases but unlocks the "real" iOS experience. ~2-3 hours.
 
 ### Recipe support
-"I made this stir-fry with chicken, rice, broccoli, soy sauce." Save the combination as a named recipe so you can log it as one item next time. Multiple ways to model this — simplest is "a recipe is just a saved meal of multiple FoodEntry rows that get inserted together."
+"I made stir-fry with chicken, rice, broccoli, soy sauce." Save the combination as a named recipe so you can log it as one item next time. Simplest model: a recipe is just a saved meal of multiple FoodEntry rows that get inserted together.
 
 ### Real OCR of nutrition labels
-Photo of nutrition facts panel → parsed into a CachedFood entry. Claude can already do this with the existing photo flow, just needs a different prompt and a UI route. Fills the Open Food Facts gap nicely.
+Photo of nutrition facts panel → parsed into a CachedFood entry. Claude can already do this with the existing photo flow, just needs a different prompt and UI route. Fills the Open Food Facts gap nicely.
 
 ### Public release
-If the app gets good enough to share: paid Apple Developer account ($99/year), App Store Connect setup, screenshots, privacy policy, marketing site. A few-day project on its own. The code's already structured well enough that this isn't a big lift technically — the work is all in the surrounding artifacts.
+Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, privacy policy, marketing site. A few-day project on its own. The code's structured well enough that this isn't a big lift technically — the work is all in the surrounding artifacts.
 
 ---
 
 ## What I'd do next if I were you
 
-In order:
-1. **Fix the −8 water bug** (you'll hit this every day until it's fixed)
-2. **Edit existing food entries** (this is the one missing primitive that makes the app feel real)
-3. **Search by name with USDA** (massively expands what you can log easily)
-4. **Use the app for a real week** before adding anything else — see what actually annoys you
+In rough order:
+1. **"Calories" rename + edit-logged-entry + meal grouping** — these three together transform daily feel
+2. **Serving unit picker** — small change, removes typos
+3. **Search by name + food library** — once you have it, no other v1 trackers compare
+4. **Trends view (averages)** — this is when "I've been tracking for a week" becomes "I'm noticing patterns"
+5. **CSV export** — easy, adds peace of mind
+6. **Use the app for a real week between 1 and 4** — what feels missing in real use is what to build next, not what's on this list
 
-Resist the urge to keep building. Real usage tells you what to build next better than any roadmap.
+The smaller items in "Next up" stack well — knock 3-4 out in one session. The bigger items (search, trends) are full-session efforts on their own.

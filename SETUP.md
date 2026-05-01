@@ -2,60 +2,81 @@
 
 A personal iOS nutrition tracker. Native SwiftUI + SwiftData, runs entirely on-device except for two API calls (Open Food Facts for barcode lookups, Claude for photo estimation).
 
-Built collaboratively over a single afternoon — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
+Built collaboratively across two sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v1.1)
+## Current state (v1.2)
 
 **Working features**
-- Today tab with calorie ring, macro pills (protein / carbs / fat), and water tracking
-- Water tracking: progress to daily goal, quick-tap buttons (−8 / +8 / +12 / +16), custom-amount text field with Log button
-- Add tab with four input methods:
-  - **Recents** — top 10 unique foods you've logged before, one tap to re-log with adjusted servings
-  - **Scan barcode** — Open Food Facts lookup, opens confirm screen where you set grams
-  - **Photo estimate** — Claude vision API estimates nutrition from a photo, shows confidence
-  - **Manual entry** — type name and macros directly
-- Settings tab: daily goals (calories, protein, carbs, fat, water) + Anthropic API key (stored in Keychain)
-- SwiftData persistence — entries survive app restarts
-- Swipe to delete entries on Today tab
+
+*Today tab*
+- Calorie ring, three macro pills (protein / carbs / fat), water tracking card
+- Tap calorie ring → "Full breakdown" sheet showing all 19 nutrients with progress bars in five sections
+- Water: tap the count to set a new total directly (logs the diff), long-press to see today's individual entries with delete
+- Custom-amount water field with negative numbers supported
+- Swipe-to-delete on logged food entries
+
+*Add tab*
+- **Recents** — top 10 unique foods, one tap opens re-log sheet
+- **Scan barcode** — Open Food Facts lookup pulls full nutrition (macros + fiber, sugar, fats detail, cholesterol, sodium, potassium, vitamins A/C/D, calcium, iron, magnesium where available)
+- **Photo estimate** — Claude vision API estimates everything it reasonably can; honestly returns nil for fields it can't see
+- **Manual entry** — full form with sections for macros, carbs detail, fats detail, electrolytes, vitamins & minerals. Optional fields stay blank instead of defaulting to 0
+
+*Settings*
+- Daily goals for calories, protein, carbs, fat, water (additional goals stored but not yet editable from UI)
+- Anthropic API key stored in Keychain
+
+*Throughout*
+- Save/Log buttons dismiss the keyboard
+- Done button on numeric keypad in long forms
+
+**Tracked nutrients (19 fields + water)**
+Calories, Protein, Carbs, Fiber, Sugar, Total Fat, Saturated, Polyunsaturated, Monounsaturated, Trans, Cholesterol, Sodium, Potassium, Vitamin A, Vitamin C, Vitamin D, Calcium, Iron, Magnesium.
+
+Critical design choice: optional fields use `Double?`. Empty form fields stay nil. Nil ≠ 0 anywhere — the breakdown displays "–" for unknown values rather than misleading zeros. This matters for sums (a vitamin total only counts entries that have that vitamin set) and will matter even more for averages over time periods.
 
 **Tech stack**
-- iOS 18+ (project deploys to iOS 26.4 on Mike's iPhone 17 Pro Max)
+- iOS 18+ (deploys to iOS 26.4 on Mike's iPhone 17 Pro Max)
+- Xcode 26.4
 - SwiftUI + SwiftData
 - VisionKit `DataScannerViewController` for barcode scanning
 - Open Food Facts API (free, no key) for product lookup
 - Anthropic Messages API (claude-opus-4-7) for photo nutrition estimation
 - Keychain for API key storage
+- Git, committed phase by phase
 
 **Project structure**
 ```
 FoodJournal/
-├── FoodJournalApp.swift         entry point, SwiftData container setup
+├── FoodJournalApp.swift              entry point, SwiftData container
 ├── Assets.xcassets
 ├── Models/
-│   └── Models.swift             FoodEntry, UserGoals, CachedFood, WaterEntry
+│   └── Models.swift                  FoodEntry, UserGoals, CachedFood, WaterEntry
 ├── Services/
-│   ├── OpenFoodFactsService.swift   barcode → product lookup
-│   ├── ClaudeVisionService.swift    photo → nutrition estimate
-│   └── KeychainStore.swift          API key storage
+│   ├── OpenFoodFactsService.swift    barcode → product lookup (full nutrition)
+│   ├── ClaudeVisionService.swift     photo → nutrition estimate (full set)
+│   └── KeychainStore.swift           API key storage
 └── Views/
-    ├── RootView.swift           tab bar
-    ├── TodayView.swift          summary, macros, water, entries list
-    ├── AddFoodView.swift        recents + 3 input cards
+    ├── RootView.swift                tab bar
+    ├── TodayView.swift               summary, macros, water, entries list
+    ├── AddFoodView.swift             recents + 3 input cards
     ├── BarcodeScannerSheet.swift
     ├── PhotoLogSheet.swift
-    └── AuxViews.swift           ConfirmFoodView, ManualEntrySheet, SettingsView, RelogSheet
+    ├── NutritionBreakdownSheet.swift full breakdown of all 19 nutrients
+    └── AuxViews.swift                ConfirmFoodView, ManualEntrySheet, SettingsView, RelogSheet
 ```
 
 ## Running it
 
-Plug iPhone in, open the project in Xcode, hit ⌘R. First-time setup is documented in the conversation history if needed (camera permission, developer mode on phone, trust certificate).
+Plug iPhone in, open the project in Xcode, hit ⌘R. First-time setup is documented in earlier conversation history (camera permission, developer mode on phone, trust certificate).
 
 To use photo logging, paste an Anthropic API key in Settings (`sk-ant-...`). Get one at console.anthropic.com — needs at least a few dollars of credit. Photo logging costs <$0.01 per estimate.
 
-## Known issues
+When the SwiftData schema changes (which means anytime fields are added to FoodEntry or UserGoals), delete the app from your phone first (long-press icon → Remove App → Delete App), then run from Xcode. Migration from the previous schema isn't set up — fresh install is the simplest path.
 
-- **Water `−8` button deletes the most recent entry instead of subtracting 8 oz.** Inconsistent with the custom-amount field which inserts a negative entry. Fix: change `logWater` to always insert (positive or negative); separately add a way to delete a specific water entry from a list view.
-- **No way to edit an existing food entry** after it's logged. You can only delete and re-add.
-- **Recents list is unique-by-name+brand**, so if you log "apple" once with 95 kcal and once with 80 kcal, only the most recent shows up. Probably fine in practice but worth noting.
-- **Open Food Facts misses many US products.** Particularly fresh produce, store brands, and small regional brands. The "search by name" feature on the roadmap will help.
-- **No error UI for network failures on barcode scan.** Open Food Facts timeouts surface as "not found" which is misleading.
+## Known issues / quirks
+
+- **No way to edit a logged food entry** — only delete and re-add. Highest-priority fix on the roadmap.
+- **Recents dedup is by name+brand** — if "apple" got logged once at 95 kcal and once at 80 kcal, only the most recent shows. Probably fine in practice.
+- **Open Food Facts unit conversions** — sodium/calcium/iron/magnesium/potassium are converted from grams to mg, vitamins A/D from g to µg, vitamin C from g to mg. These conversions are right for ~95% of products. If a product reads dramatically wrong, it might be storing data in an unusual unit and we'd need a one-off fix.
+- **No error UI for network failures on barcode scan** — Open Food Facts timeouts surface as "not found" which is misleading.
+- **Goals beyond the 5 visible in Settings** are stored with sensible defaults (40g fiber, 50g sugar, 2300mg sodium, etc.) but not yet editable from the UI. They power the Full breakdown progress bars.
