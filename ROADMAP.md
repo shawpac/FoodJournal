@@ -1,45 +1,41 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v1.3. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+
+---
+
+## Recently shipped (v1.3)
+
+For reference, since this got asked. ✅ items have been completed:
+
+- ✅ "Calories" instead of "kcal" — shows as "Calories" in headers, "cal" in compact rows
+- ✅ Click into and edit any logged entry — full 19-field edit sheet, all nutrients editable
+- ✅ Serving unit dropdown (grams/ml/oz on top, plus serving/cup/tbsp/tsp, plus Custom… for anything else)
+- ✅ Better Recents — relative timestamps + swipe-left to remove
+- ✅ Meal grouping on Today (Breakfast / Lunch / Dinner / Snacks with subtotals)
+- ✅ Select-all-on-focus on numeric fields — tapping a value highlights it for clean overwrite
 
 ---
 
 ## Next up — small fixes & high-leverage cleanups
 
-These are the daily-friction items. Small, contained, big payoff.
-
-### "Calories" instead of "kcal"
-One-word find/replace across the app. Trivial.
-
-### Click into and edit any logged entry
-Right now if you log a chicken sandwich at 1 serving and realize it was 1.5, you have to delete and re-add. Tap any entry on Today → opens an edit sheet with all the fields editable. The `RelogSheet` UI we already built is most of the work; this is "open it on an existing entry instead of creating a new one." ~30 min.
-
-### Serving unit dropdown in manual entry
-Currently a free text field. Replace with a picker containing common units (grams, milliliters, ounces, serving, piece, cup, tbsp, tsp, slice) plus a "Custom…" option that opens a text field for unusual cases like "1 burrito." ~20 min.
-
-### Fix the water −8 button (legacy, may already be done)
-Verify this is fixed in current build. Earlier the `-8` button deleted the most recent water entry instead of subtracting 8 oz. The "set total directly" feature replaced this, but check that the legacy quick-tap buttons (if any remain) behave correctly.
-
-### Better Recents
-Two small improvements:
-1. Show "Last logged: yesterday at 8am" so you can recognize what you're picking
-2. Long-press to delete from recents (in case something one-time gets stuck there)
-
 ### Polish that emerges from real use
-You'll spot these as you use the app. Examples:
-- Numbers should round better (3.0 → 3, not 3.0)
+You'll spot these as you use the app. Examples that are likely to bug you:
+- Numbers should round better in some places (3.0 should display as 3, not 3.0)
 - Barcode scanner needs a clear "tap to scan again" if it misreads
-- Haptic feedback on logging actions
+- Haptic feedback on logging actions — adds tactile confirmation
+- Empty states could be friendlier (currently just "Nothing logged yet today.")
+- The breakdown sheet rows could indicate which entries contributed (tap a row to see "from these foods")
+
+### Goals UI for all 19 nutrients
+Currently Settings only exposes calories/protein/carbs/fat/water goals editable in the UI. The other 14 nutrient goals are stored with sensible defaults but you can't change them. Add a "More goals" section in Settings. ~30 min.
+
+### Entry deletion that actually undoes
+Right now swipe-to-delete is permanent. iOS users expect a brief "undo" snackbar at the bottom. Saves a real "oh shit" moment when you misclick. ~20 min.
 
 ---
 
 ## Tier 1 — Will improve daily use most
-
-### Meal grouping on Today (Breakfast / Lunch / Dinner / Snack)
-Today tab currently shows one flat list of entries. Group by meal type with running subtotals per meal. Helps you see what's eating your calorie budget. The `mealType` field already exists on every entry — pure UI work. ~30 min.
-
-### Edit logged-entry's full nutrient set
-Extension of "click into and edit any logged entry" above — if the entry has all 19 nutrient fields filled (e.g., from a photo estimate), the edit sheet should let you adjust all of them, not just servings.
 
 ### Search by name + persistent food library
 Combines two of Mike's asks: a USDA-backed search for fresh foods (so you can log "apple" without barcode hunting) AND a personal library of every unique food you've previously logged. One unified search that hits local first, USDA second.
@@ -55,15 +51,12 @@ Critical design choice for averages: only count days that had data for that nutr
 
 Apple's `Charts` framework also makes line charts easy if you want to see trend over time, not just averages. Probably ~2 hours total.
 
-### Entry deletion that actually undoes
-Right now swipe-to-delete is permanent. iOS users expect a brief "undo" snackbar at the bottom. Saves a real "oh shit" moment when you misclick. ~20 min.
+### Export your data to CSV
+"Settings → Export" with a custom-range date picker. Generates a CSV of all entries in range, opens iOS share sheet so you can email/save it. Each row is one logged entry with all 19 nutrient fields as columns. ~30 min.
 
 ---
 
 ## Tier 2 — Useful but not urgent
-
-### Export your data to CSV
-"Settings → Export" with a custom-range date picker. Generates a CSV of all entries in range, opens iOS share sheet so you can email/save it. Each row is one logged entry with all 19 nutrient fields as columns. ~30 min.
 
 ### iCloud sync across devices
 Convert SwiftData container to use CloudKit. Data syncs to other Apple devices automatically. Comes with edge cases (conflicts, offline, free Apple ID limits CloudKit usage). Worth doing only if you actually use a second device. ~1-2 hours including testing.
@@ -81,9 +74,6 @@ Optional reminder to log dinner at 8pm if you haven't logged anything in 4 hours
 ### Smart auto-fill defaults
 If you eat the same breakfast every weekday, the app should know that. After 2 weeks of data, suggest "Log your usual?" Tier 3 ML eventually, but a basic version is just "what did the user log between 7-10am yesterday."
 
-### Goals UI for all 19 nutrients
-Currently Settings only exposes calories/protein/carbs/fat/water. The other 14 nutrient goals are stored with sensible defaults but not editable. Add a "More goals" section.
-
 ---
 
 ## Tier 3 — Polish & advanced
@@ -96,7 +86,7 @@ Currently Settings only exposes calories/protein/carbs/fat/water. The other 14 n
 - Custom typography — currently very system-default
 
 ### Macros breakdown by meal
-Show how each macro is distributed across breakfast/lunch/dinner. Helps with timing ("I keep eating 80% of my carbs at dinner").
+Now that meal grouping exists on Today, this is a smaller addition: show how each macro is distributed across breakfast/lunch/dinner. Helps with timing ("I keep eating 80% of my carbs at dinner").
 
 ### Weight tracking
 Stretch goal — simple weight log tab. Pairs well with the trends view.
@@ -118,11 +108,10 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 ## What I'd do next if I were you
 
 In rough order:
-1. **"Calories" rename + edit-logged-entry + meal grouping** — these three together transform daily feel
-2. **Serving unit picker** — small change, removes typos
-3. **Search by name + food library** — once you have it, no other v1 trackers compare
-4. **Trends view (averages)** — this is when "I've been tracking for a week" becomes "I'm noticing patterns"
-5. **CSV export** — easy, adds peace of mind
-6. **Use the app for a real week between 1 and 4** — what feels missing in real use is what to build next, not what's on this list
+1. **Use the app for 3-5 real days** before adding any new features. The app is now genuinely usable end-to-end. Real friction will tell you what's actually missing better than any roadmap entry can.
+2. **Search by name + food library** — once this exists, the app feels complete. No other v1 trackers compare.
+3. **Trends view** — this is when "I've been tracking for a week" becomes "I'm noticing patterns."
+4. **CSV export** — easy, adds peace of mind.
+5. **Goals UI for all 19 nutrients + small polish items** — bundle these into one cleanup session.
 
-The smaller items in "Next up" stack well — knock 3-4 out in one session. The bigger items (search, trends) are full-session efforts on their own.
+The big ones (search, trends) are full-session efforts each. The small items in "Next up" stack well — knock 3-4 out together.
