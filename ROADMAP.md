@@ -1,37 +1,35 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.3. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v1.4. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
-## Recently shipped (v1.3)
+## Recently shipped
 
-For reference, since this got asked. ✅ items have been completed:
+### v1.4 — quick wins + cost-down on photo logging
 
-- ✅ "Calories" instead of "kcal" — shows as "Calories" in headers, "cal" in compact rows
-- ✅ Click into and edit any logged entry — full 19-field edit sheet, all nutrients editable
-- ✅ Serving unit dropdown (grams/ml/oz on top, plus serving/cup/tbsp/tsp, plus Custom… for anything else)
+**Photo logging cost optimization:**
+- ✅ Switched to Claude Sonnet 4.6 (~5x cheaper per call than Opus, no accuracy loss for food photos)
+- ✅ Confirmation step before sending photo (Analyze button — prevents accidental API charges)
+- ✅ Image-hash caching (re-logging the same photo returns instantly with no API call; hashes pixel data, not JPEG bytes)
+- ✅ Capped `max_tokens` at 1024 (guards against runaway responses)
+- ✅ Camera-based photo capture replaces photo library picker (snap the meal in front of you)
+
+**Quick-win polish pass:**
+- ✅ Number rounding: "3" not "3.0", "<0.1" for tiny values, "2.5" for fractional
+- ✅ Friendlier empty states (Today tab + water entries sheet)
+- ✅ Haptic feedback on logging, saving, and destructive actions
+- ✅ Editable goals for all 14 secondary nutrients (fiber, sugar, fats detail, electrolytes, vitamins, minerals)
+- ✅ Undo on swipe-delete with 5-second toast (food entries only)
+
+### v1.3
+
+- ✅ "Calories" instead of "kcal"
+- ✅ Click into and edit any logged entry — full 19-field edit sheet
+- ✅ Serving unit dropdown with Custom… option
 - ✅ Better Recents — relative timestamps + swipe-left to remove
 - ✅ Meal grouping on Today (Breakfast / Lunch / Dinner / Snacks with subtotals)
-- ✅ Select-all-on-focus on numeric fields — tapping a value highlights it for clean overwrite
-
----
-
-## Next up — small fixes & high-leverage cleanups
-
-### Polish that emerges from real use
-You'll spot these as you use the app. Examples that are likely to bug you:
-- Numbers should round better in some places (3.0 should display as 3, not 3.0)
-- Barcode scanner needs a clear "tap to scan again" if it misreads
-- Haptic feedback on logging actions — adds tactile confirmation
-- Empty states could be friendlier (currently just "Nothing logged yet today.")
-- The breakdown sheet rows could indicate which entries contributed (tap a row to see "from these foods")
-
-### Goals UI for all 19 nutrients
-Currently Settings only exposes calories/protein/carbs/fat/water goals editable in the UI. The other 14 nutrient goals are stored with sensible defaults but you can't change them. Add a "More goals" section in Settings. ~30 min.
-
-### Entry deletion that actually undoes
-Right now swipe-to-delete is permanent. iOS users expect a brief "undo" snackbar at the bottom. Saves a real "oh shit" moment when you misclick. ~20 min.
+- ✅ Select-all-on-focus on numeric fields
 
 ---
 
@@ -58,21 +56,25 @@ Apple's `Charts` framework also makes line charts easy if you want to see trend 
 
 ## Tier 2 — Useful but not urgent
 
+### Undo for water deletes and Recents removal
+v1.4 added undo for food entries only. Same pattern could extend to:
+- Water entries swipe-delete in WaterEntriesSheet
+- Recents swipe-delete in AddFoodView
+~30 min for both. Recents is arguably the more useful one — accidentally removing a frequently-eaten food is annoying.
+
 ### iCloud sync across devices
 Convert SwiftData container to use CloudKit. Data syncs to other Apple devices automatically. Comes with edge cases (conflicts, offline, free Apple ID limits CloudKit usage). Worth doing only if you actually use a second device. ~1-2 hours including testing.
-
-### Better photo logging
-- Take photo directly in-app instead of only library
-- Show photo as a thumbnail on the logged entry
-- Re-prompt Claude with "are you sure?" if confidence is low
-- Cache photo locally so you can review history
-- Multi-photo support — sometimes one angle isn't enough
 
 ### Notification reminders
 Optional reminder to log dinner at 8pm if you haven't logged anything in 4 hours. Apple's `UserNotifications` framework. Get this wrong and it's annoying — get it right and you actually use the app daily.
 
 ### Smart auto-fill defaults
 If you eat the same breakfast every weekday, the app should know that. After 2 weeks of data, suggest "Log your usual?" Tier 3 ML eventually, but a basic version is just "what did the user log between 7-10am yesterday."
+
+### Better photo logging
+- Re-prompt Claude with "are you sure?" if confidence is low
+- Multi-photo support — sometimes one angle isn't enough
+- Cache history with thumbnails would be a separate feature (and explicitly off the roadmap — Mike doesn't want photos balooning the DB)
 
 ---
 
@@ -107,11 +109,13 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next if I were you
 
-In rough order:
-1. **Use the app for 3-5 real days** before adding any new features. The app is now genuinely usable end-to-end. Real friction will tell you what's actually missing better than any roadmap entry can.
-2. **Search by name + food library** — once this exists, the app feels complete. No other v1 trackers compare.
-3. **Trends view** — this is when "I've been tracking for a week" becomes "I'm noticing patterns."
-4. **CSV export** — easy, adds peace of mind.
-5. **Goals UI for all 19 nutrients + small polish items** — bundle these into one cleanup session.
+The app is genuinely usable end-to-end at v1.4. Real usage will tell you what's missing better than any roadmap entry can.
 
-The big ones (search, trends) are full-session efforts each. The small items in "Next up" stack well — knock 3-4 out together.
+In rough order:
+1. **Use the app for 3-5 real days** before adding any new features. After v1.4 the surface area is solid; what's left is value-add, not foundation.
+2. **CSV export** — easy, adds peace of mind for data ownership
+3. **Search by name + food library** — once this exists, the app feels complete. No other v1 trackers compare.
+4. **Trends view** — this is when "I've been tracking for a week" becomes "I'm noticing patterns."
+5. **Undo for water/Recents** — bundle with any other small-fix session
+
+The big ones (search, trends) are full-session efforts each. The small items in Tier 2 stack well — knock 2-3 out together.

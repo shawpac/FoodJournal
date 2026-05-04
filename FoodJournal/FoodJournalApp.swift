@@ -5,11 +5,13 @@ import SwiftData
 struct FoodJournalApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            FoodEntry.self,
-            UserGoals.self,
-            CachedFood.self,
-            WaterEntry.self
-        ])
+                    FoodEntry.self,
+                    UserGoals.self,
+                    CachedFood.self,
+                    WaterEntry.self,
+                    CachedPhotoEstimate.self,
+                    LibraryFood.self
+                ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
             return try ModelContainer(for: schema, configurations: [config])

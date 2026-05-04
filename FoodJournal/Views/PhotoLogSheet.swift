@@ -1,47 +1,80 @@
 import SwiftUI
-import PhotosUI
 import SwiftData
 
 struct PhotoLogSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
-    @State private var selectedItem: PhotosPickerItem?
-    @State private var image: UIImage?
-    @State private var estimate: ClaudeVisionService.Estimate?
-    @State private var isAnalyzing = false
-    @State private var errorMessage: String?
-    @State private var mealType = "snack"
+        @State private var image: UIImage?
+        @State private var estimate: ClaudeVisionService.Estimate?
+        @State private var isAnalyzing = false
+        @State private var errorMessage: String?
+        @State private var mealType = "snack"
+        @State private var showingCamera = false
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     if let image {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 280)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    } else {
-                        PhotosPicker(selection: $selectedItem, matching: .images) {
-                            VStack(spacing: 8) {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.system(size: 44))
-                                Text("Choose a photo of your meal")
-                                    .font(.subheadline)
-                            }
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, minHeight: 220)
-                            .background(Color(.secondarySystemGroupedBackground),
-                                        in: RoundedRectangle(cornerRadius: 16))
-                        }
-                    }
+                                            Image(uiImage: image)
+                                                .resizable()
+                                                .scaledToFit()
+                                                .frame(maxHeight: 280)
+                                                .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                    if isAnalyzing {
-                        ProgressView("Asking Claude…")
-                            .padding(.top, 12)
-                    }
+                                            // Show Analyze + Pick different photo buttons when we have an image
+                                            // but haven't analyzed it yet (and aren't currently analyzing).
+                                            if estimate == nil && !isAnalyzing {
+                                                HStack(spacing: 8) {
+                                                                                Button {
+                                                                                    showingCamera = true
+                                                                                } label: {
+                                                                                    Text("Retake")
+                                                                                        .font(.subheadline.weight(.medium))
+                                                                                        .frame(maxWidth: .infinity)
+                                                                                        .padding(.vertical, 12)
+                                                                                        .background(Color(.secondarySystemGroupedBackground),
+                                                                                                    in: RoundedRectangle(cornerRadius: 12))
+                                                                                        .foregroundStyle(.primary)
+                                                                                }
+                                                                                .buttonStyle(.plain)
+
+                                                                                Button {
+                                                                                    Task { await analyze(image) }
+                                                                                } label: {
+                                                                                    Text("Analyze")
+                                                                                        .font(.subheadline.weight(.semibold))
+                                                                                        .frame(maxWidth: .infinity)
+                                                                                        .padding(.vertical, 12)
+                                                                                        .background(.pink, in: RoundedRectangle(cornerRadius: 12))
+                                                                                        .foregroundStyle(.white)
+                                                                                }
+                                                                                .buttonStyle(.plain)
+                                                                            }
+                                            }
+                    } else {
+                                            Button {
+                                                showingCamera = true
+                                            } label: {
+                                                VStack(spacing: 8) {
+                                                    Image(systemName: "camera.fill")
+                                                        .font(.system(size: 44))
+                                                    Text("Take a photo of your meal")
+                                                        .font(.subheadline)
+                                                }
+                                                .foregroundStyle(.secondary)
+                                                .frame(maxWidth: .infinity, minHeight: 220)
+                                                .background(Color(.secondarySystemGroupedBackground),
+                                                            in: RoundedRectangle(cornerRadius: 16))
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+
+                                        if isAnalyzing {
+                                            ProgressView("Asking Claude…")
+                                                .padding(.top, 12)
+                                        }
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -83,59 +116,123 @@ struct PhotoLogSheet: View {
                     Button("Cancel") { dismiss() }
                 }
             }
-            .onChange(of: selectedItem) { _, newItem in
-                Task { await loadImage(newItem) }
-            }
-        }
-    }
-
-    private func loadImage(_ item: PhotosPickerItem?) async {
-        guard let item else { return }
-        do {
-            if let data = try await item.loadTransferable(type: Data.self),
-               let img = UIImage(data: data) {
-                image = img
-                await analyze(img)
-            }
-        } catch {
-            errorMessage = "Could not load image: \(error.localizedDescription)"
+            .onAppear {
+                            if image == nil {
+                                showingCamera = true
+                            }
+                        }
+            .fullScreenCover(isPresented: $showingCamera) {
+                            CameraPicker(image: $image)
+                                .ignoresSafeArea()
+                                .onDisappear {
+                                    // Clear stale estimate so the Analyze button reappears for the new photo.
+                                    if estimate != nil { estimate = nil }
+                                }
+                        }
         }
     }
 
     private func analyze(_ img: UIImage) async {
-        let key = KeychainStore.loadAPIKey()
-        guard !key.isEmpty else {
-            errorMessage = "Add your Anthropic API key in Settings first."
-            return
+            // Compute the hash first so we can check the cache.
+            guard let prepared = ClaudeVisionService.prepareImage(img) else {
+                errorMessage = "Could not encode image."
+                return
+            }
+            let imageHash = prepared.hash
+
+            // Cache hit?
+            let descriptor = FetchDescriptor<CachedPhotoEstimate>(
+                predicate: #Predicate { $0.imageHash == imageHash }
+            )
+            if let cached = try? context.fetch(descriptor).first {
+                print("PhotoLogSheet: cache hit, skipping API call")
+                estimate = cached.toEstimate()
+                return
+            }
+
+            // Cache miss — go to the API.
+            let key = KeychainStore.loadAPIKey()
+            guard !key.isEmpty else {
+                errorMessage = "Add your Anthropic API key in Settings first."
+                return
+            }
+            isAnalyzing = true
+            errorMessage = nil
+            estimate = nil
+            defer { isAnalyzing = false }
+            do {
+                let result = try await ClaudeVisionService.estimate(image: img, apiKey: key)
+                estimate = result
+
+                // Save to cache so the same photo doesn't cost again next time.
+                let cache = CachedPhotoEstimate(
+                    imageHash: imageHash,
+                    name: result.name,
+                    servings: result.servings,
+                    servingUnit: result.serving_unit,
+                    calories: result.calories,
+                    protein: result.protein,
+                    carbs: result.carbs,
+                    fat: result.fat,
+                    saturatedFat: result.saturated_fat,
+                    polyunsaturatedFat: result.polyunsaturated_fat,
+                    monounsaturatedFat: result.monounsaturated_fat,
+                    transFat: result.trans_fat,
+                    fiber: result.fiber,
+                    sugar: result.sugar,
+                    cholesterol: result.cholesterol,
+                    sodium: result.sodium,
+                    potassium: result.potassium,
+                    vitaminA: result.vitamin_a,
+                    vitaminC: result.vitamin_c,
+                    vitaminD: result.vitamin_d,
+                    calcium: result.calcium,
+                    iron: result.iron,
+                    magnesium: result.magnesium,
+                    confidence: result.confidence,
+                    notes: result.notes
+                )
+                context.insert(cache)
+            } catch let serviceError as ClaudeVisionService.ServiceError {
+                errorMessage = serviceError.errorDescription ?? "Unknown error"
+            } catch {
+                errorMessage = "Estimate failed: \(error.localizedDescription)"
+            }
         }
-        isAnalyzing = true
-        errorMessage = nil
-        estimate = nil
-        defer { isAnalyzing = false }
-        do {
-                    estimate = try await ClaudeVisionService.estimate(image: img, apiKey: key)
-                } catch let serviceError as ClaudeVisionService.ServiceError {
-                    errorMessage = serviceError.errorDescription ?? "Unknown error"
-                } catch {
-                    errorMessage = "Estimate failed: \(error.localizedDescription)"
-                }
-    }
 
     private func saveEntry(_ e: ClaudeVisionService.Estimate) {
-        let entry = FoodEntry(
-            name: e.name,
-            servings: e.servings,
-            servingUnit: e.serving_unit,
-            calories: e.calories,
-            protein: e.protein,
-            carbs: e.carbs,
-            fat: e.fat,
-            mealType: mealType,
-            source: "photo"
-        )
-        context.insert(entry)
-        dismiss()
-    }
+            dismissKeyboard()
+            Haptic.success()
+            let entry = FoodEntry(
+                name: e.name,
+                servings: e.servings,
+                servingUnit: e.serving_unit,
+                calories: e.calories,
+                protein: e.protein,
+                carbs: e.carbs,
+                fat: e.fat,
+                saturatedFat: e.saturated_fat,
+                polyunsaturatedFat: e.polyunsaturated_fat,
+                monounsaturatedFat: e.monounsaturated_fat,
+                transFat: e.trans_fat,
+                fiber: e.fiber,
+                sugar: e.sugar,
+                cholesterol: e.cholesterol,
+                sodium: e.sodium,
+                potassium: e.potassium,
+                vitaminA: e.vitamin_a,
+                vitaminC: e.vitamin_c,
+                vitaminD: e.vitamin_d,
+                calcium: e.calcium,
+                iron: e.iron,
+                magnesium: e.magnesium,
+                mealType: mealType,
+                source: "photo"
+            )
+            context.insert(entry)
+            LibraryFoodUpsert.upsert(from: entry, in: context)
+            dismiss()
+        }
 }
 
 private struct EstimateCard: View {
@@ -155,7 +252,7 @@ private struct EstimateCard: View {
             }
 
             HStack(spacing: 16) {
-                stat("kcal", "\(Int(estimate.calories))")
+                stat("cal", "\(Int(estimate.calories))")
                 stat("P",    "\(Int(estimate.protein))g")
                 stat("C",    "\(Int(estimate.carbs))g")
                 stat("F",    "\(Int(estimate.fat))g")
@@ -185,6 +282,49 @@ private struct EstimateCard: View {
         case "high":   return .green
         case "medium": return .orange
         default:       return .red
+        }
+    }
+}
+// MARK: - CameraPicker
+// Wraps UIImagePickerController so SwiftUI can present the system camera UI.
+// Camera is only available on real devices, never on the simulator — that's
+// expected, and our Add tab already requires a real device for the barcode scanner.
+struct CameraPicker: UIViewControllerRepresentable {
+    @Binding var image: UIImage?
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.cameraCaptureMode = .photo
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+
+        init(_ parent: CameraPicker) {
+            self.parent = parent
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let img = info[.originalImage] as? UIImage {
+                parent.image = img
+            }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            parent.dismiss()
         }
     }
 }

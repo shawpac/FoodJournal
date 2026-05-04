@@ -5,12 +5,13 @@ import SwiftData
 struct AddFoodView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
-
+    
     @State private var showingScanner = false
+    @State private var showingSearch = false
     @State private var showingPhotoPicker = false
     @State private var showingManual = false
     @State private var relogTemplate: FoodEntry?
-
+    
     // 10 most recent unique foods, deduped by name+brand
     private var recents: [FoodEntry] {
         var seen = Set<String>()
@@ -24,7 +25,7 @@ struct AddFoodView: View {
         }
         return result
     }
-
+    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -32,21 +33,28 @@ struct AddFoodView: View {
                     if !recents.isEmpty {
                         recentsCard
                     }
-
+                    
                     AddOptionCard(
-                        title: "Scan barcode",
-                        subtitle: "Look up packaged food by UPC",
-                        systemImage: "barcode.viewfinder",
-                        tint: .orange
-                    ) { showingScanner = true }
+                                            title: "Search foods",
+                                            subtitle: "Your library + USDA database",
+                                            systemImage: "magnifyingglass",
+                                            tint: .green
+                                        ) { showingSearch = true }
 
+                                        AddOptionCard(
+                                            title: "Scan barcode",
+                                            subtitle: "Look up packaged food by UPC",
+                                            systemImage: "barcode.viewfinder",
+                                            tint: .orange
+                                        ) { showingScanner = true }
+                    
                     AddOptionCard(
                         title: "Photo estimate",
                         subtitle: "Use Claude to estimate nutrition from a photo",
                         systemImage: "camera.fill",
                         tint: .pink
                     ) { showingPhotoPicker = true }
-
+                    
                     AddOptionCard(
                         title: "Manual entry",
                         subtitle: "Type in name and macros",
@@ -58,6 +66,7 @@ struct AddFoodView: View {
             }
             .navigationTitle("Add food")
             .background(Color(.systemGroupedBackground))
+            .sheet(isPresented: $showingSearch)     { SearchSheet() }
             .sheet(isPresented: $showingScanner)    { BarcodeScannerSheet() }
             .sheet(isPresented: $showingPhotoPicker) { PhotoLogSheet() }
             .sheet(isPresented: $showingManual)     { ManualEntrySheet() }
@@ -66,64 +75,99 @@ struct AddFoodView: View {
             }
         }
     }
-
+    
     private var recentsCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundStyle(.purple)
-                Text("Recents")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(.horizontal, 4)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .foregroundStyle(.purple)
+                    Text("Recents")
+                        .font(.headline)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
 
-            ForEach(recents) { entry in
-                Button {
-                    relogTemplate = entry
-                } label: {
-                    HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.name)
-                                .font(.body)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            HStack(spacing: 6) {
-                                if let brand = entry.brand, !brand.isEmpty {
-                                    Text(brand)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                // Using a List so we get native swipe-to-delete on rows.
+                // Height is bounded so it doesn't take the whole screen.
+                List {
+                    ForEach(recents) { entry in
+                        Button {
+                            relogTemplate = entry
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(entry.name)
+                                        .font(.body)
+                                        .foregroundStyle(.primary)
+                                        .lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        if let brand = entry.brand, !brand.isEmpty {
+                                            Text(brand)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                            Text("•")
+                                                .font(.caption)
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                        Text("\(formatted(entry.servings)) \(entry.servingUnit)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text("•")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                        Text(relativeDate(entry.loggedAt))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
-                                Text("\(formatted(entry.servings)) \(entry.servingUnit)")
-                                    .font(.caption)
+                                Spacer()
+                                Text("\(Int(entry.calories * entry.servings)) cal")
+                                    .font(.callout.monospacedDigit())
                                     .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
                             }
                         }
-                        Spacer()
-                        Text("\(Int(entry.calories * entry.servings)) kcal")
-                            .font(.callout.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.tertiary)
+                        .buttonStyle(.plain)
+                        .listRowBackground(Color(.tertiarySystemGroupedBackground))
+                        .swipeActions(edge: .trailing) {
+                            Button(role: .destructive) {
+                                removeFromRecents(entry)
+                            } label: {
+                                Label("Remove", systemImage: "trash")
+                            }
+                        }
                     }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                    .background(Color(.tertiarySystemGroupedBackground),
-                                in: RoundedRectangle(cornerRadius: 10))
                 }
-                .buttonStyle(.plain)
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .frame(height: CGFloat(recents.count) * 64)  // ~64pt per row, just enough to fit
+            }
+            .padding(12)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+    
+    private func formatted(_ d: Double) -> String {
+            FoodFormat.value(d)
+        }
+    private func relativeDate(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: .now)
+    }
+    
+    private func removeFromRecents(_ entry: FoodEntry) {
+            Haptic.medium()
+            let nameKey = entry.name.lowercased()
+        let brandKey = entry.brand?.lowercased() ?? ""
+        for candidate in allEntries {
+            let candidateKey = "\(candidate.name.lowercased())|\(candidate.brand?.lowercased() ?? "")"
+            if candidateKey == "\(nameKey)|\(brandKey)" {
+                context.delete(candidate)
             }
         }
-        .padding(12)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func formatted(_ d: Double) -> String {
-        d.truncatingRemainder(dividingBy: 1) == 0
-            ? String(Int(d))
-            : String(format: "%.1f", d)
     }
 }
 

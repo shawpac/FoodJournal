@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import CryptoKit
 
 enum ClaudeVisionService {
 
@@ -13,6 +14,23 @@ enum ClaudeVisionService {
         let fat: Double
         let confidence: String
         let notes: String?
+
+        // All optional — Claude returns null when it can't reasonably estimate.
+        let saturated_fat: Double?
+        let polyunsaturated_fat: Double?
+        let monounsaturated_fat: Double?
+        let trans_fat: Double?
+        let fiber: Double?
+        let sugar: Double?
+        let cholesterol: Double?
+        let sodium: Double?
+        let potassium: Double?
+        let vitamin_a: Double?
+        let vitamin_c: Double?
+        let vitamin_d: Double?
+        let calcium: Double?
+        let iron: Double?
+        let magnesium: Double?
     }
 
     enum ServiceError: LocalizedError {
@@ -39,39 +57,75 @@ enum ClaudeVisionService {
         }
     }
 
-    static let model = "claude-opus-4-7"
+    static let model = "claude-sonnet-4-6"
+
+    /// Produces the resized/compressed JPEG bytes and a SHA256 hash of the resized
+    /// image's raw pixels. Use the hash as a cache key — same photo in = same hash out.
+    static func prepareImage(_ image: UIImage) -> (jpeg: Data, hash: String)? {
+        let resized = image.resizedForUpload(maxDimension: 768)
+        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else { return nil }
+        guard let pixelData = resized.pixelData() else { return nil }
+        let digest = SHA256.hash(data: pixelData)
+        let hash = digest.map { String(format: "%02x", $0) }.joined()
+        return (jpeg, hash)
+    }
+
+    /// The system prompt sent with every photo. Built as joined lines to avoid
+    /// Swift's multi-line string indentation rules biting us.
+    private static let promptText: String = [
+        "Analyze this photo of food and estimate its nutrition for ONE serving as shown.",
+        "",
+        "Return ONLY a JSON object — no markdown, no prose — with this exact shape:",
+        "{",
+        "  \"name\": \"short descriptive name\",",
+        "  \"servings\": 1,",
+        "  \"serving_unit\": \"plate\" | \"bowl\" | \"piece\" | \"cup\" | \"g\",",
+        "  \"calories\": number,",
+        "  \"protein\": number,",
+        "  \"carbs\": number,",
+        "  \"fat\": number,",
+        "  \"saturated_fat\": number or null,",
+        "  \"polyunsaturated_fat\": number or null,",
+        "  \"monounsaturated_fat\": number or null,",
+        "  \"trans_fat\": number or null,",
+        "  \"fiber\": number or null,",
+        "  \"sugar\": number or null,",
+        "  \"cholesterol\": number or null,",
+        "  \"sodium\": number or null,",
+        "  \"potassium\": number or null,",
+        "  \"vitamin_a\": number or null,",
+        "  \"vitamin_c\": number or null,",
+        "  \"vitamin_d\": number or null,",
+        "  \"calcium\": number or null,",
+        "  \"iron\": number or null,",
+        "  \"magnesium\": number or null,",
+        "  \"confidence\": \"high\" | \"medium\" | \"low\",",
+        "  \"notes\": \"optional caveat about your estimate\"",
+        "}",
+        "",
+        "Units (only fill if you can reasonably estimate, otherwise null):",
+        "- Macros and fiber/sugar/fats: grams",
+        "- Cholesterol, sodium, potassium, vitamin C, calcium, iron, magnesium: milligrams",
+        "- Vitamin A, vitamin D: micrograms (µg)",
+        "",
+        "Use null for fields you genuinely cannot estimate from a photo. Do NOT guess",
+        "vitamin/mineral content unless the food is well-known to be a significant",
+        "source (e.g., orange = vitamin C, milk = calcium, leafy greens = iron).",
+        "",
+        "Be realistic about portion size. If ambiguous, assume a typical adult portion",
+        "and lower your confidence accordingly."
+    ].joined(separator: "\n")
 
     static func estimate(image: UIImage, apiKey: String) async throws -> Estimate {
         print("ClaudeVisionService: starting estimate, key length \(apiKey.count)")
         guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey }
 
-        // Aggressive compression: 768px max + 0.6 quality keeps payload ~50-100KB,
-        // which is plenty of detail for food and dodges -1005 connection drops.
-        let resized = image.resizedForUpload(maxDimension: 768)
-        guard let jpeg = resized.jpegData(compressionQuality: 0.6) else {
+        guard let prepared = prepareImage(image) else {
             throw ServiceError.imageEncodingFailed
         }
+        let jpeg = prepared.jpeg
         let base64 = jpeg.base64EncodedString()
-        print("ClaudeVisionService: image \(jpeg.count) bytes, base64 \(base64.count) chars")
-
-        let prompt = """
-        Analyze this photo of food and estimate its nutrition.
-
-        Return ONLY a JSON object — no markdown, no prose — with this exact shape:
-        {
-          "name": "short descriptive name",
-          "servings": 1,
-          "serving_unit": "plate" | "bowl" | "piece" | "cup" | "g",
-          "calories": number,
-          "protein": number,
-          "carbs": number,
-          "fat": number,
-          "confidence": "high" | "medium" | "low",
-          "notes": "optional caveat about your estimate"
-        }
-
-        Be realistic. If portion size is ambiguous, assume a typical adult portion and lower your confidence.
-        """
+        print("ClaudeVisionService: image \(jpeg.count) bytes, base64 \(base64.count) chars, hash \(prepared.hash.prefix(8))…")
 
         let body: [String: Any] = [
             "model": model,
@@ -87,7 +141,7 @@ enum ClaudeVisionService {
                             "data": base64
                         ]
                     ],
-                    ["type": "text", "text": prompt]
+                    ["type": "text", "text": promptText]
                 ]
             ]]
         ]
@@ -100,14 +154,12 @@ enum ClaudeVisionService {
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         request.timeoutInterval = 90
 
-        // Use a session with looser timeouts and HTTP/2 retry-friendly behavior.
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 90
         config.timeoutIntervalForResource = 120
         config.waitsForConnectivity = true
         let session = URLSession(configuration: config)
 
-        // Up to 3 attempts on transient network errors. Each attempt re-uses the same request.
         var lastError: Error?
         for attempt in 1...3 {
             print("ClaudeVisionService: attempt \(attempt)")
@@ -148,7 +200,6 @@ enum ClaudeVisionService {
                 }
 
             } catch let error as ServiceError {
-                // Don't retry our own logical errors, only network ones.
                 throw error
             } catch let urlError as URLError where shouldRetry(urlError) {
                 lastError = urlError
@@ -167,11 +218,11 @@ enum ClaudeVisionService {
 
     private static func shouldRetry(_ error: URLError) -> Bool {
         switch error.code {
-        case .networkConnectionLost,    // -1005
-             .timedOut,                 // -1001
-             .notConnectedToInternet,   // -1009
-             .cannotConnectToHost,      // -1004
-             .dnsLookupFailed:          // -1006
+        case .networkConnectionLost,
+             .timedOut,
+             .notConnectedToInternet,
+             .cannotConnectToHost,
+             .dnsLookupFailed:
             return true
         default:
             return false
@@ -179,15 +230,44 @@ enum ClaudeVisionService {
     }
 }
 
-private extension UIImage {
+fileprivate extension UIImage {
     func resizedForUpload(maxDimension: CGFloat) -> UIImage {
-            let longest = max(size.width, size.height)
-            guard longest > maxDimension else { return self }
-            let scale = maxDimension / longest
-            let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-            let renderer = UIGraphicsImageRenderer(size: newSize)
-            return renderer.image { _ in
-                draw(in: CGRect(origin: .zero, size: newSize))
-            }
+        let longest = max(size.width, size.height)
+        guard longest > maxDimension else { return self }
+        let scale = maxDimension / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            draw(in: CGRect(origin: .zero, size: newSize))
         }
     }
+
+    /// Returns raw RGBA pixel bytes by drawing the image into a fixed-format
+    /// CGContext. This normalizes away color profile / encoding differences,
+    /// so the same visual image always produces the same bytes.
+    func pixelData() -> Data? {
+        let width = Int(size.width)
+        let height = Int(size.height)
+        guard width > 0, height > 0 else { return nil }
+
+        let bytesPerPixel = 4
+        let bytesPerRow = width * bytesPerPixel
+        var bytes = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: &bytes,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: bytesPerRow,
+                space: colorSpace,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ),
+              let cgImage = self.cgImage
+        else { return nil }
+
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return Data(bytes)
+    }
+}

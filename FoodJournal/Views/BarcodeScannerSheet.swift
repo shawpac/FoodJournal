@@ -16,19 +16,34 @@ struct BarcodeScannerSheet: View {
             ZStack {
                 if let product {
                     ConfirmFoodView(
-                        prefill: .init(
-                            name: product.name,
-                            brand: product.brand,
-                            barcode: product.barcode,
-                            caloriesPer100g: product.caloriesPer100g,
-                            proteinPer100g: product.proteinPer100g,
-                            carbsPer100g: product.carbsPer100g,
-                            fatPer100g: product.fatPer100g,
-                            servingSizeGrams: product.servingSizeGrams
-                        ),
-                        source: "barcode",
-                        onSaved: { dismiss() }
-                    )
+                                            prefill: .init(
+                                                name: product.name,
+                                                brand: product.brand,
+                                                barcode: product.barcode,
+                                                servingSizeGrams: product.servingSizeGrams,
+                                                caloriesPer100g: product.caloriesPer100g,
+                                                proteinPer100g: product.proteinPer100g,
+                                                carbsPer100g: product.carbsPer100g,
+                                                fatPer100g: product.fatPer100g,
+                                                saturatedFatPer100g: product.saturatedFatPer100g,
+                                                polyunsaturatedFatPer100g: product.polyunsaturatedFatPer100g,
+                                                monounsaturatedFatPer100g: product.monounsaturatedFatPer100g,
+                                                transFatPer100g: product.transFatPer100g,
+                                                fiberPer100g: product.fiberPer100g,
+                                                sugarPer100g: product.sugarPer100g,
+                                                cholesterolPer100g: product.cholesterolPer100g,
+                                                sodiumPer100g: product.sodiumPer100g,
+                                                potassiumPer100g: product.potassiumPer100g,
+                                                vitaminAPer100g: product.vitaminAPer100g,
+                                                vitaminCPer100g: product.vitaminCPer100g,
+                                                vitaminDPer100g: product.vitaminDPer100g,
+                                                calciumPer100g: product.calciumPer100g,
+                                                ironPer100g: product.ironPer100g,
+                                                magnesiumPer100g: product.magnesiumPer100g
+                                            ),
+                                            source: "barcode",
+                                            onSaved: { dismiss() }
+                                        )
                 } else {
                     BarcodeScannerView(scannedCode: $scannedCode)
                         .ignoresSafeArea()
