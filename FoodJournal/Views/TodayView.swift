@@ -12,6 +12,7 @@ struct TodayView: View {
     @State private var undoMessage: String?
     @State private var pendingDeleteIDs: [PersistentIdentifier] = []
     @State private var undoTask: Task<Void, Never>?
+    @State private var openMeal: String?    // which meal's detail sheet is open
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query private var goalsList: [UserGoals]
 
@@ -46,16 +47,17 @@ struct TodayView: View {
         NavigationStack {
             ZStack(alignment: .bottom) {
                 ScrollView {
-                    VStack(spacing: 24) {
-                        summaryCard
-                        macroBreakdown
+                    VStack(spacing: 16) {
+                        dailyTotalsCard
                         waterCard
-                        entriesSection
+                        ForEach(mealOrder, id: \.self) { meal in
+                            mealSummaryCard(meal: meal)
+                        }
                     }
                     .padding()
                 }
 
-                // Undo toast — overlays the bottom of the view, above the tab bar.
+                // Undo toast
                 if let undoMessage {
                     HStack(spacing: 12) {
                         Text(undoMessage)
@@ -77,20 +79,57 @@ struct TodayView: View {
             .animation(.easeInOut(duration: 0.2), value: undoMessage)
             .navigationTitle("Today")
             .background(Color(.systemGroupedBackground))
+            .sheet(item: $entryToEdit) { entry in
+                EditEntrySheet(entry: entry)
+            }
+            .sheet(item: Binding(
+                get: { openMeal.map(MealID.init) },
+                set: { openMeal = $0?.value }
+            )) { mealID in
+                MealDetailSheet(
+                    mealKey: mealID.value,
+                    mealLabel: mealLabel(mealID.value),
+                    onEditEntry: { entry in entryToEdit = entry },
+                    onSoftDelete: softDelete
+                )
+            }
         }
     }
 
-    private var summaryCard: some View {
-        VStack(spacing: 16) {
-            Text("\(Int(totals.cal))")
-                .font(.system(size: 56, weight: .bold, design: .rounded))
-                .contentTransition(.numericText())
-            Text("of \(Int(goals.calorieGoal)) Calories")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+    // MARK: - Daily totals (consolidated)
 
-            ProgressView(value: min(totals.cal / max(goals.calorieGoal, 1), 1))
-                .tint(.orange)
+    private var dailyTotalsCard: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                StatTile(
+                    label: "Cal",
+                    value: "\(Int(totals.cal))",
+                    sub: "/ \(Int(goals.calorieGoal))",
+                    progress: totals.cal / max(goals.calorieGoal, 1),
+                    color: .orange
+                )
+                StatTile(
+                    label: "Protein",
+                    value: "\(Int(totals.p))g",
+                    sub: "/ \(Int(goals.proteinGoal))g",
+                    progress: totals.p / max(goals.proteinGoal, 1),
+                    color: .red
+                )
+                StatTile(
+                    label: "Carbs",
+                    value: "\(Int(totals.c))g",
+                    sub: "/ \(Int(goals.carbsGoal))g",
+                    progress: totals.c / max(goals.carbsGoal, 1),
+                    color: .blue
+                )
+                StatTile(
+                    label: "Fat",
+                    value: "\(Int(totals.f))g",
+                    sub: "/ \(Int(goals.fatGoal))g",
+                    progress: totals.f / max(goals.fatGoal, 1),
+                    color: .yellow
+                )
+            }
 
             Button {
                 showingBreakdown = true
@@ -105,21 +144,14 @@ struct TodayView: View {
             }
             .buttonStyle(.plain)
         }
-        .frame(maxWidth: .infinity)
-        .padding(24)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         .sheet(isPresented: $showingBreakdown) {
             NutritionBreakdownSheet()
         }
     }
 
-    private var macroBreakdown: some View {
-        HStack(spacing: 12) {
-            MacroPill(label: "Protein", value: totals.p, goal: goals.proteinGoal, color: .red)
-            MacroPill(label: "Carbs",   value: totals.c, goal: goals.carbsGoal,   color: .blue)
-            MacroPill(label: "Fat",     value: totals.f, goal: goals.fatGoal,     color: .yellow)
-        }
-    }
+    // MARK: - Water (unchanged)
 
     private var waterCard: some View {
         VStack(spacing: 12) {
@@ -196,64 +228,46 @@ struct TodayView: View {
         }
     }
 
-    private func logWater(_ amountOz: Double) {
-        guard amountOz != 0 else { return }
-        Haptic.light()
-        context.insert(WaterEntry(amountOz: amountOz))
-    }
+    // MARK: - Meal summary card (new)
 
-    /// Soft-delete a food entry: mark it pending and schedule the actual delete.
-    private func softDelete(_ entry: FoodEntry) {
-        Haptic.medium()
-        entry.pendingDeleteAt = .now
-        pendingDeleteIDs.append(entry.persistentModelID)
-        undoMessage = "Deleted \(entry.name)"
+    private func mealSummaryCard(meal: String) -> some View {
+        let entries = entriesForMeal(meal)
+        let cal = mealCalories(meal)
+        let isEmpty = entries.isEmpty
 
-        // Cancel any prior undo timer and start fresh — gives the user 5s from
-        // their MOST RECENT delete, not 5s from the first one in a chain.
-        undoTask?.cancel()
-        undoTask = Task {
-            try? await Task.sleep(nanoseconds: 5_000_000_000)
-            if Task.isCancelled { return }
-            await MainActor.run { commitPendingDeletes() }
-        }
-    }
-
-    /// User tapped Undo — restore everything currently pending.
-    private func undoDelete() {
-        Haptic.light()
-        undoTask?.cancel()
-        for id in pendingDeleteIDs {
-            if let entry = allEntries.first(where: { $0.persistentModelID == id }) {
-                entry.pendingDeleteAt = nil
+        return Button {
+            openMeal = meal
+        } label: {
+            HStack {
+                Text(mealLabel(meal))
+                    .font(.headline)
+                    .foregroundStyle(isEmpty ? .secondary : .primary)
+                Spacer()
+                if isEmpty {
+                    Text("—")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                } else {
+                    Text("\(Int(cal)) cal")
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
+            .padding(16)
+            .background(
+                Color(.secondarySystemGroupedBackground)
+                    .opacity(isEmpty ? 0.6 : 1.0),
+                in: RoundedRectangle(cornerRadius: 16)
+            )
         }
-        pendingDeleteIDs.removeAll()
-        undoMessage = nil
+        .buttonStyle(.plain)
     }
 
-    /// Timer expired — actually delete everything that's still pending.
-    private func commitPendingDeletes() {
-        for id in pendingDeleteIDs {
-            if let entry = allEntries.first(where: { $0.persistentModelID == id }) {
-                context.delete(entry)
-            }
-        }
-        pendingDeleteIDs.removeAll()
-        undoMessage = nil
-    }
+    // MARK: - Helpers
 
-    private func applyTotalEdit() {
-        guard let newTotal = Double(totalEditText.trimmingCharacters(in: .whitespaces)) else { return }
-        let diff = newTotal - todayWaterOz
-        if diff != 0 {
-            Haptic.light()
-            context.insert(WaterEntry(amountOz: diff))
-        }
-        dismissKeyboard()
-    }
-
-    // Order in which meal sections appear, regardless of when they were logged.
     private var mealOrder: [String] { ["breakfast", "lunch", "dinner", "snack"] }
 
     private func entriesForMeal(_ meal: String) -> [FoodEntry] {
@@ -274,102 +288,101 @@ struct TodayView: View {
         }
     }
 
-    private var entriesSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if todayEntries.isEmpty {
-                VStack(spacing: 10) {
-                    Image(systemName: "fork.knife.circle")
-                        .font(.system(size: 44))
-                        .foregroundStyle(.orange.opacity(0.7))
-                    Text("Ready when you are")
-                        .font(.headline)
-                    Text("Tap **Add** below to log your first item of the day.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 32)
-                .padding(.horizontal, 16)
-                .background(Color(.secondarySystemGroupedBackground),
-                            in: RoundedRectangle(cornerRadius: 16))
-            } else {
-                ForEach(mealOrder, id: \.self) { meal in
-                    let entries = entriesForMeal(meal)
-                    if !entries.isEmpty {
-                        mealCard(meal: meal, entries: entries)
-                    }
-                }
-            }
-        }
-        .sheet(item: $entryToEdit) { entry in
-            EditEntrySheet(entry: entry)
+    private func logWater(_ amountOz: Double) {
+        guard amountOz != 0 else { return }
+        Haptic.light()
+        context.insert(WaterEntry(amountOz: amountOz))
+    }
+
+    private func softDelete(_ entry: FoodEntry) {
+        Haptic.medium()
+        entry.pendingDeleteAt = .now
+        pendingDeleteIDs.append(entry.persistentModelID)
+        undoMessage = "Deleted \(entry.name)"
+
+        undoTask?.cancel()
+        undoTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if Task.isCancelled { return }
+            await MainActor.run { commitPendingDeletes() }
         }
     }
 
-    private func mealCard(meal: String, entries: [FoodEntry]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(mealLabel(meal))
-                    .font(.headline)
-                Spacer()
-                Text("\(Int(mealCalories(meal))) cal")
-                    .font(.subheadline.monospacedDigit())
-                    .foregroundStyle(.secondary)
+    private func undoDelete() {
+        Haptic.light()
+        undoTask?.cancel()
+        for id in pendingDeleteIDs {
+            if let entry = allEntries.first(where: { $0.persistentModelID == id }) {
+                entry.pendingDeleteAt = nil
             }
-            .padding(.horizontal, 4)
-
-            List {
-                ForEach(entries) { entry in
-                    Button {
-                        entryToEdit = entry
-                    } label: {
-                        EntryRow(entry: entry)
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(Color(.tertiarySystemGroupedBackground))
-                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            softDelete(entry)
-                        } label: {
-                            Label("Delete", systemImage: "trash")
-                        }
-                    }
-                }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .frame(height: CGFloat(entries.count) * 76)
         }
-        .padding(12)
-        .background(Color(.secondarySystemGroupedBackground),
-                    in: RoundedRectangle(cornerRadius: 16))
+        pendingDeleteIDs.removeAll()
+        undoMessage = nil
     }
 
-    private struct MacroPill: View {
+    private func commitPendingDeletes() {
+        for id in pendingDeleteIDs {
+            if let entry = allEntries.first(where: { $0.persistentModelID == id }) {
+                context.delete(entry)
+            }
+        }
+        pendingDeleteIDs.removeAll()
+        undoMessage = nil
+    }
+
+    private func applyTotalEdit() {
+        guard let newTotal = Double(totalEditText.trimmingCharacters(in: .whitespaces)) else { return }
+        let diff = newTotal - todayWaterOz
+        if diff != 0 {
+            Haptic.light()
+            context.insert(WaterEntry(amountOz: diff))
+        }
+        dismissKeyboard()
+    }
+
+    // Identifiable wrapper so sheet(item:) can use a String
+    private struct MealID: Identifiable {
+        let value: String
+        var id: String { value }
+    }
+
+    // MARK: - Subviews
+
+    private struct StatTile: View {
         let label: String
-        let value: Double
-        let goal: Double
+        let value: String
+        let sub: String
+        let progress: Double
         let color: Color
 
         var body: some View {
-            VStack(spacing: 6) {
-                Text(label).font(.caption).foregroundStyle(.secondary)
-                Text("\(Int(value))g")
-                    .font(.system(.title3, design: .rounded, weight: .semibold))
-                Text("/ \(Int(goal))g")
-                    .font(.caption2).foregroundStyle(.secondary)
-                ProgressView(value: min(value / max(goal, 1), 1)).tint(color)
+            VStack(spacing: 4) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.system(.callout, design: .rounded, weight: .semibold))
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(sub)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                ProgressView(value: min(progress, 1))
+                    .tint(color)
             }
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(Color(.secondarySystemGroupedBackground),
-                        in: RoundedRectangle(cornerRadius: 16))
+            .padding(.vertical, 10)
+            .background(Color(.tertiarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
-    private struct EntryRow: View {
+    // MARK: - EntryRow (unchanged, used by MealDetailSheet)
+
+    struct EntryRow: View {
         let entry: FoodEntry
 
         var body: some View {
@@ -407,6 +420,8 @@ struct TodayView: View {
             FoodFormat.value(d)
         }
     }
+
+    // MARK: - WaterEntriesSheet (unchanged)
 
     struct WaterEntriesSheet: View {
         @Environment(\.dismiss) private var dismiss
@@ -485,3 +500,136 @@ struct TodayView: View {
     }
 }
 
+// MARK: - MealDetailSheet
+struct MealDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var context
+    @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
+
+    let mealKey: String
+    let mealLabel: String
+    let onEditEntry: (FoodEntry) -> Void
+    let onSoftDelete: (FoodEntry) -> Void
+
+    @State private var showingManual = false
+    @State private var showingSearch = false
+    @State private var showingScanner = false
+    @State private var showingPhoto = false
+
+    private var entries: [FoodEntry] {
+        allEntries.filter {
+            Calendar.current.isDateInToday($0.loggedAt) &&
+            $0.pendingDeleteAt == nil &&
+            $0.mealType == mealKey
+        }
+    }
+
+    private var totals: (cal: Double, p: Double, c: Double, f: Double) {
+        entries.reduce((0, 0, 0, 0)) { acc, e in
+            (acc.0 + e.calories * e.servings,
+             acc.1 + e.protein  * e.servings,
+             acc.2 + e.carbs    * e.servings,
+             acc.3 + e.fat      * e.servings)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(Int(totals.cal)) cal")
+                                .font(.title2.monospacedDigit().weight(.semibold))
+                            Text("P \(Int(totals.p))g · C \(Int(totals.c))g · F \(Int(totals.f))g")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                }
+
+                Section("Entries") {
+                    if entries.isEmpty {
+                        VStack(spacing: 8) {
+                            Image(systemName: "fork.knife.circle")
+                                .font(.system(size: 36))
+                                .foregroundStyle(.tertiary)
+                            Text("Nothing logged for \(mealLabel.lowercased()) yet.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 20)
+                        .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(entries) { entry in
+                            Button {
+                                onEditEntry(entry)
+                            } label: {
+                                TodayView.EntryRow(entry: entry)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
+                            .listRowBackground(Color.clear)
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    onSoftDelete(entry)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Section("Add to \(mealLabel.lowercased())") {
+                    Button {
+                        showingSearch = true
+                    } label: {
+                        Label("Search foods", systemImage: "magnifyingglass")
+                            .foregroundStyle(.green)
+                    }
+                    Button {
+                        showingScanner = true
+                    } label: {
+                        Label("Scan barcode", systemImage: "barcode.viewfinder")
+                            .foregroundStyle(.orange)
+                    }
+                    Button {
+                        showingPhoto = true
+                    } label: {
+                        Label("Photo estimate", systemImage: "camera.fill")
+                            .foregroundStyle(.pink)
+                    }
+                    Button {
+                        showingManual = true
+                    } label: {
+                        Label("Manual entry", systemImage: "square.and.pencil")
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+            .navigationTitle(mealLabel)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .sheet(isPresented: $showingManual) {
+                ManualEntrySheet(defaultMeal: mealKey)
+            }
+            .sheet(isPresented: $showingSearch) {
+                SearchSheet(defaultMeal: mealKey)
+            }
+            .sheet(isPresented: $showingScanner) {
+                BarcodeScannerSheet(defaultMeal: mealKey)
+            }
+            .sheet(isPresented: $showingPhoto) {
+                PhotoLogSheet(defaultMeal: mealKey)
+            }
+        }
+    }
+}

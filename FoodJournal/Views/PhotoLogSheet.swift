@@ -5,12 +5,20 @@ struct PhotoLogSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
-        @State private var image: UIImage?
-        @State private var estimate: ClaudeVisionService.Estimate?
-        @State private var isAnalyzing = false
-        @State private var errorMessage: String?
-        @State private var mealType = "snack"
-        @State private var showingCamera = false
+        let defaultMeal: String?
+
+    init(defaultMeal: String? = nil) {
+                self.defaultMeal = defaultMeal
+                _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+            }
+
+    @State private var image: UIImage?
+            @State private var estimate: ClaudeVisionService.Estimate?
+            @State private var isAnalyzing = false
+            @State private var errorMessage: String?
+            @State private var mealType: String
+            @State private var showingCamera = false
+            @State private var showingLateSnackAlert = false
 
     var body: some View {
         NavigationStack {
@@ -96,16 +104,16 @@ struct PhotoLogSheet: View {
                         .pickerStyle(.segmented)
 
                         Button {
-                            saveEntry(estimate)
-                        } label: {
-                            Text("Log this")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.orange)
-                    }
+                                                    attemptSave(estimate)
+                                                } label: {
+                                                    Text("Log this")
+                                                        .font(.headline)
+                                                        .frame(maxWidth: .infinity)
+                                                        .padding(.vertical, 12)
+                                                }
+                                                .buttonStyle(.borderedProminent)
+                                                .tint(.orange)
+                                            }
                 }
                 .padding()
             }
@@ -122,16 +130,23 @@ struct PhotoLogSheet: View {
                             }
                         }
             .fullScreenCover(isPresented: $showingCamera) {
-                            CameraPicker(image: $image)
-                                .ignoresSafeArea()
-                                .onDisappear {
-                                    // Clear stale estimate so the Analyze button reappears for the new photo.
-                                    if estimate != nil { estimate = nil }
-                                }
+                                        CameraPicker(image: $image)
+                                            .ignoresSafeArea()
+                                            .onDisappear {
+                                                // Clear stale estimate so the Analyze button reappears for the new photo.
+                                                if estimate != nil { estimate = nil }
+                                            }
+                                    }
+                        .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
+                            Button("Cancel", role: .cancel) { }
+                            Button("Log it anyway") {
+                                if let e = estimate { saveEntry(e) }
+                            }
+                        } message: {
+                            Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
                         }
-        }
-    }
-
+                    }
+                }
     private func analyze(_ img: UIImage) async {
             // Compute the hash first so we can check the cache.
             guard let prepared = ClaudeVisionService.prepareImage(img) else {
@@ -199,7 +214,13 @@ struct PhotoLogSheet: View {
                 errorMessage = "Estimate failed: \(error.localizedDescription)"
             }
         }
-
+    private func attemptSave(_ e: ClaudeVisionService.Estimate) {
+            if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
+                showingLateSnackAlert = true
+            } else {
+                saveEntry(e)
+            }
+        }
     private func saveEntry(_ e: ClaudeVisionService.Estimate) {
             dismissKeyboard()
             Haptic.success()

@@ -6,6 +6,12 @@ struct BarcodeScannerSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
+    let defaultMeal: String?
+
+    init(defaultMeal: String? = nil) {
+        self.defaultMeal = defaultMeal
+    }
+
     @State private var scannedCode: String?
     @State private var product: OpenFoodFactsService.Product?
     @State private var isLoading = false
@@ -42,8 +48,9 @@ struct BarcodeScannerSheet: View {
                                                 magnesiumPer100g: product.magnesiumPer100g
                                             ),
                                             source: "barcode",
-                                            onSaved: { dismiss() }
-                                        )
+                                                                                        defaultMeal: defaultMeal,
+                                                                                        onSaved: { dismiss() }
+                                                                                    )
                 } else {
                     BarcodeScannerView(scannedCode: $scannedCode)
                         .ignoresSafeArea()

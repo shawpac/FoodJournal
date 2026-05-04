@@ -84,16 +84,20 @@ struct ConfirmFoodView: View {
     @Environment(\.modelContext) private var context
     let prefill: Prefill
     let source: String
+    let defaultMeal: String?
     let onSaved: () -> Void
 
     @State private var grams: Double
-    @State private var mealType = "snack"
+    @State private var mealType: String
+    @State private var showingLateSnackAlert = false
 
-    init(prefill: Prefill, source: String, onSaved: @escaping () -> Void) {
+    init(prefill: Prefill, source: String, defaultMeal: String? = nil, onSaved: @escaping () -> Void) {
         self.prefill = prefill
         self.source = source
+        self.defaultMeal = defaultMeal
         self.onSaved = onSaved
         _grams = State(initialValue: prefill.servingSizeGrams ?? 100)
+        _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
     }
 
     private var multiplier: Double { grams / 100 }
@@ -152,7 +156,7 @@ struct ConfirmFoodView: View {
 
             Section {
                 Button {
-                    save()
+                    attemptSave()
                 } label: {
                     Text("Add to journal").frame(maxWidth: .infinity)
                 }
@@ -165,12 +169,18 @@ struct ConfirmFoodView: View {
         .selectAllOnFocus()
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Save") { save() }
+                Button("Save") { attemptSave() }
             }
             ToolbarItemGroup(placement: .keyboard) {
                 Spacer()
                 Button("Done") { dismissKeyboard() }
             }
+        }
+        .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
+            Button("Cancel", role: .cancel) { }
+            Button("Log it anyway") { save() }
+        } message: {
+            Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
         }
     }
 
@@ -184,6 +194,14 @@ struct ConfirmFoodView: View {
     private func optionalRow(_ label: String, _ value: Double?, unit: String) -> some View {
         if let v = value {
             LabeledContent(label, value: "\(FoodFormat.value(v)) \(unit)")
+        }
+    }
+
+    private func attemptSave() {
+        if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
+            showingLateSnackAlert = true
+        } else {
+            save()
         }
     }
 
@@ -228,13 +246,16 @@ struct ManualEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
+    let defaultMeal: String?
+
     @State private var name = ""
     @State private var brand = ""
     @State private var servings: Double = 1
     @State private var servingUnit = "g"
     @State private var isCustomUnit = false
     @State private var customUnitText = ""
-    @State private var mealType = "snack"
+    @State private var mealType: String
+    @State private var showingLateSnackAlert = false
 
     @State private var calories: Double = 0
     @State private var protein:  Double = 0
@@ -256,6 +277,11 @@ struct ManualEntrySheet: View {
     @State private var calciumStr = ""
     @State private var ironStr = ""
     @State private var magnesiumStr = ""
+
+    init(defaultMeal: String? = nil) {
+        self.defaultMeal = defaultMeal
+        _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+    }
 
     var body: some View {
         NavigationStack {
@@ -354,13 +380,19 @@ struct ManualEntrySheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }
+                    Button("Save") { attemptSave() }
                         .disabled(name.isEmpty)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
                     Button("Done") { dismissKeyboard() }
                 }
+            }
+            .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Log it anyway") { save() }
+            } message: {
+                Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
             }
         }
     }
@@ -386,6 +418,14 @@ struct ManualEntrySheet: View {
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
             Text(suffix).foregroundStyle(.secondary)
+        }
+    }
+
+    private func attemptSave() {
+        if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
+            showingLateSnackAlert = true
+        } else {
+            save()
         }
     }
 
@@ -822,14 +862,17 @@ struct RelogSheet: View {
     @Environment(\.modelContext) private var context
 
     let template: FoodEntry
-    @State private var servings: Double
-    @State private var mealType: String
+        let defaultMeal: String?
+        @State private var servings: Double
+        @State private var mealType: String
+        @State private var showingLateSnackAlert = false
 
-    init(template: FoodEntry) {
-        self.template = template
-        _servings = State(initialValue: template.servings)
-        _mealType = State(initialValue: template.mealType)
-    }
+    init(template: FoodEntry, defaultMeal: String? = nil) {
+            self.template = template
+            self.defaultMeal = defaultMeal
+            _servings = State(initialValue: template.servings)
+            _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+        }
 
     var body: some View {
         NavigationStack {
@@ -869,17 +912,29 @@ struct RelogSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .selectAllOnFocus()
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { dismiss() }
+                            }
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Log") { attemptSave() }
+                                    .disabled(servings <= 0)
+                            }
+                        }
+                        .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
+                            Button("Cancel", role: .cancel) { }
+                            Button("Log it anyway") { save() }
+                        } message: {
+                            Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
+                        }
+                    }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Log") { save() }
-                        .disabled(servings <= 0)
-                }
+    private func attemptSave() {
+            if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
+                showingLateSnackAlert = true
+            } else {
+                save()
             }
         }
-    }
-
     private func save() {
         dismissKeyboard()
         Haptic.success()

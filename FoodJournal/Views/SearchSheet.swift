@@ -9,6 +9,12 @@ struct SearchSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
+    let defaultMeal: String?
+
+    init(defaultMeal: String? = nil) {
+        self.defaultMeal = defaultMeal
+    }
+
     @State private var query: String = ""
     @State private var libraryResults: [LibraryFood] = []
     @State private var usdaResults: [USDAService.SearchHit] = []
@@ -133,12 +139,11 @@ struct SearchSheet: View {
                 debounceUSDASearch(newValue)
             }
             .sheet(item: $pendingPick) { pick in
-                NavigationStack {
-                    ConfirmFoodView(prefill: pick.prefill, source: "search") {
-                        // Save closure: dismiss confirm + parent search sheet, return user to wherever.
-                        pendingPick = nil
-                        dismiss()
-                    }
+                            NavigationStack {
+                                ConfirmFoodView(prefill: pick.prefill, source: "search", defaultMeal: defaultMeal) {
+                                    pendingPick = nil
+                                    dismiss()
+                                }
                     .navigationTitle("Confirm")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
