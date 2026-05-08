@@ -3,6 +3,13 @@ import SwiftData
 
 struct TodayView: View {
     @Environment(\.modelContext) private var context
+
+    /// The calendar day currently being viewed. Hoisted to RootView so the Add
+        /// tab can read the same date. All cards and queries filter to entries on
+        /// this day.
+        @Binding var selectedDate: Date
+    @State private var showingDatePicker = false
+
     @State private var customWaterAmount: String = ""
     @State private var showingWaterEntries = false
     @State private var showingTotalEdit = false
@@ -12,12 +19,25 @@ struct TodayView: View {
     @State private var undoMessage: String?
     @State private var pendingDeleteIDs: [PersistentIdentifier] = []
     @State private var undoTask: Task<Void, Never>?
-    @State private var openMeal: String?    // which meal's detail sheet is open
+    @State private var openMeal: String?
+
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query private var goalsList: [UserGoals]
+    @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
 
-    private var todayEntries: [FoodEntry] {
-        allEntries.filter { Calendar.current.isDateInToday($0.loggedAt) && $0.pendingDeleteAt == nil }
+    // MARK: - Date-aware queries
+
+    private var entriesForSelectedDay: [FoodEntry] {
+        allEntries.filter {
+            Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) &&
+            $0.pendingDeleteAt == nil
+        }
+    }
+
+    private var waterOzForSelectedDay: Double {
+        allWater
+            .filter { Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) }
+            .reduce(0) { $0 + $1.amountOz }
     }
 
     private var goals: UserGoals {
@@ -27,21 +47,54 @@ struct TodayView: View {
         return new
     }
 
-    @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
-    private var todayWaterOz: Double {
-        allWater
-            .filter { Calendar.current.isDateInToday($0.loggedAt) }
-            .reduce(0) { $0 + $1.amountOz }
-    }
-
     private var totals: (cal: Double, p: Double, c: Double, f: Double) {
-        todayEntries.reduce((0, 0, 0, 0)) { acc, e in
+        entriesForSelectedDay.reduce((0, 0, 0, 0)) { acc, e in
             (acc.0 + e.calories * e.servings,
              acc.1 + e.protein  * e.servings,
              acc.2 + e.carbs    * e.servings,
              acc.3 + e.fat      * e.servings)
         }
     }
+
+    // MARK: - Date helpers
+
+    private var isToday: Bool {
+        Calendar.current.isDateInToday(selectedDate)
+    }
+
+    private var dateLabel: String {
+        let cal = Calendar.current
+        if cal.isDateInToday(selectedDate) { return "Today" }
+        if cal.isDateInYesterday(selectedDate) { return "Yesterday" }
+        let f = DateFormatter()
+        f.dateFormat = "EEE, MMM d"
+        return f.string(from: selectedDate)
+    }
+
+    /// Returns a timestamp for newly-saved entries. If viewing today, uses .now
+    /// to preserve real time-of-day. If viewing a past day, uses noon of that day —
+    /// the entry only needs to land on the correct calendar day, hour doesn't matter
+    /// for display (entries are grouped by mealType field, not by hour).
+    private func timestampForSave() -> Date {
+        let cal = Calendar.current
+        if cal.isDateInToday(selectedDate) {
+            return .now
+        }
+        return cal.date(bySettingHour: 12, minute: 0, second: 0, of: selectedDate) ?? selectedDate
+    }
+
+    private func shiftDay(_ days: Int) {
+        let cal = Calendar.current
+        guard let newDate = cal.date(byAdding: .day, value: days, to: selectedDate) else { return }
+        let normalized = cal.startOfDay(for: newDate)
+        // Never allow future dates.
+        let todayStart = cal.startOfDay(for: .now)
+        guard normalized <= todayStart else { return }
+        Haptic.light()
+        selectedDate = normalized
+    }
+
+    // MARK: - Body
 
     var body: some View {
         NavigationStack {
@@ -77,8 +130,43 @@ struct TodayView: View {
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: undoMessage)
-            .navigationTitle("Today")
             .background(Color(.systemGroupedBackground))
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        shiftDay(-1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.body.weight(.semibold))
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    Button {
+                        showingDatePicker = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(dateLabel)
+                                .font(.headline)
+                                .foregroundStyle(.primary)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        shiftDay(1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.body.weight(.semibold))
+                    }
+                    .disabled(isToday)
+                }
+            }
+            .sheet(isPresented: $showingDatePicker) {
+                datePickerSheet
+            }
             .sheet(item: $entryToEdit) { entry in
                 EditEntrySheet(entry: entry)
             }
@@ -89,6 +177,7 @@ struct TodayView: View {
                 MealDetailSheet(
                     mealKey: mealID.value,
                     mealLabel: mealLabel(mealID.value),
+                    selectedDate: selectedDate,
                     onEditEntry: { entry in entryToEdit = entry },
                     onSoftDelete: softDelete
                 )
@@ -96,7 +185,42 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - Daily totals (consolidated)
+    // MARK: - Date picker sheet
+
+    private var datePickerSheet: some View {
+        NavigationStack {
+            VStack {
+                DatePicker(
+                    "Pick a day",
+                    selection: $selectedDate,
+                    in: ...Calendar.current.startOfDay(for: .now),
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.graphical)
+                .padding()
+                Spacer()
+            }
+            .navigationTitle("Pick a date")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Today") {
+                        selectedDate = Calendar.current.startOfDay(for: .now)
+                        showingDatePicker = false
+                    }
+                    .disabled(isToday)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        showingDatePicker = false
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    // MARK: - Daily totals card
 
     private var dailyTotalsCard: some View {
         VStack(spacing: 12) {
@@ -147,11 +271,11 @@ struct TodayView: View {
         .padding(16)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
         .sheet(isPresented: $showingBreakdown) {
-            NutritionBreakdownSheet()
-        }
+                    NutritionBreakdownSheet(selectedDate: selectedDate)
+                }
     }
 
-    // MARK: - Water (unchanged)
+    // MARK: - Water
 
     private var waterCard: some View {
         VStack(spacing: 12) {
@@ -162,11 +286,11 @@ struct TodayView: View {
                     .font(.headline)
                 Spacer()
                 Button {
-                    totalEditText = "\(Int(todayWaterOz))"
+                    totalEditText = "\(Int(waterOzForSelectedDay))"
                     showingTotalEdit = true
                 } label: {
                     HStack(spacing: 4) {
-                        Text("\(Int(todayWaterOz)) / \(Int(goals.waterGoalOz)) oz")
+                        Text("\(Int(waterOzForSelectedDay)) / \(Int(goals.waterGoalOz)) oz")
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                         Image(systemName: "pencil")
@@ -182,7 +306,7 @@ struct TodayView: View {
                 )
             }
 
-            ProgressView(value: min(todayWaterOz / max(goals.waterGoalOz, 1), 1))
+            ProgressView(value: min(waterOzForSelectedDay / max(goals.waterGoalOz, 1), 1))
                 .tint(.cyan)
 
             HStack(spacing: 8) {
@@ -216,7 +340,7 @@ struct TodayView: View {
         .background(Color(.secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 16))
         .sheet(isPresented: $showingWaterEntries) {
-            WaterEntriesSheet()
+            WaterEntriesSheet(selectedDate: selectedDate)
         }
         .alert("Set water total", isPresented: $showingTotalEdit) {
             TextField("oz", text: $totalEditText)
@@ -224,11 +348,11 @@ struct TodayView: View {
             Button("Cancel", role: .cancel) {}
             Button("Set") { applyTotalEdit() }
         } message: {
-            Text("Today: \(Int(todayWaterOz)) oz. Type the new total in oz.")
+            Text("\(dateLabel): \(Int(waterOzForSelectedDay)) oz. Type the new total in oz.")
         }
     }
 
-    // MARK: - Meal summary card (new)
+    // MARK: - Meal summary card
 
     private func mealSummaryCard(meal: String) -> some View {
         let entries = entriesForMeal(meal)
@@ -271,7 +395,7 @@ struct TodayView: View {
     private var mealOrder: [String] { ["breakfast", "lunch", "dinner", "snack"] }
 
     private func entriesForMeal(_ meal: String) -> [FoodEntry] {
-        todayEntries.filter { $0.mealType == meal }
+        entriesForSelectedDay.filter { $0.mealType == meal }
     }
 
     private func mealCalories(_ meal: String) -> Double {
@@ -291,7 +415,7 @@ struct TodayView: View {
     private func logWater(_ amountOz: Double) {
         guard amountOz != 0 else { return }
         Haptic.light()
-        context.insert(WaterEntry(amountOz: amountOz))
+        context.insert(WaterEntry(amountOz: amountOz, loggedAt: timestampForSave()))
     }
 
     private func softDelete(_ entry: FoodEntry) {
@@ -332,10 +456,10 @@ struct TodayView: View {
 
     private func applyTotalEdit() {
         guard let newTotal = Double(totalEditText.trimmingCharacters(in: .whitespaces)) else { return }
-        let diff = newTotal - todayWaterOz
+        let diff = newTotal - waterOzForSelectedDay
         if diff != 0 {
             Haptic.light()
-            context.insert(WaterEntry(amountOz: diff))
+            context.insert(WaterEntry(amountOz: diff, loggedAt: timestampForSave()))
         }
         dismissKeyboard()
     }
@@ -380,7 +504,7 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - EntryRow (unchanged, used by MealDetailSheet)
+    // MARK: - EntryRow
 
     struct EntryRow: View {
         let entry: FoodEntry
@@ -421,19 +545,36 @@ struct TodayView: View {
         }
     }
 
-    // MARK: - WaterEntriesSheet (unchanged)
+    // MARK: - WaterEntriesSheet
 
     struct WaterEntriesSheet: View {
         @Environment(\.dismiss) private var dismiss
         @Environment(\.modelContext) private var context
+        let selectedDate: Date
         @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
 
-        private var todayEntries: [WaterEntry] {
-            allWater.filter { Calendar.current.isDateInToday($0.loggedAt) }
+        private var entriesForDay: [WaterEntry] {
+            allWater.filter { Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) }
         }
 
         private var total: Double {
-            todayEntries.reduce(0) { $0 + $1.amountOz }
+            entriesForDay.reduce(0) { $0 + $1.amountOz }
+        }
+
+        private var sheetTitle: String {
+            let cal = Calendar.current
+            if cal.isDateInToday(selectedDate) { return "Today's water" }
+            if cal.isDateInYesterday(selectedDate) { return "Yesterday's water" }
+            let f = DateFormatter()
+            f.dateFormat = "MMM d"
+            return "\(f.string(from: selectedDate)) — water"
+        }
+
+        private var totalLabel: String {
+            let cal = Calendar.current
+            if cal.isDateInToday(selectedDate) { return "Total today" }
+            if cal.isDateInYesterday(selectedDate) { return "Total yesterday" }
+            return "Total"
         }
 
         var body: some View {
@@ -441,7 +582,7 @@ struct TodayView: View {
                 List {
                     Section {
                         HStack {
-                            Text("Total today")
+                            Text(totalLabel)
                                 .font(.headline)
                             Spacer()
                             Text("\(formatted(total)) oz")
@@ -451,15 +592,15 @@ struct TodayView: View {
                     }
 
                     Section("Entries") {
-                        if todayEntries.isEmpty {
+                        if entriesForDay.isEmpty {
                             HStack(spacing: 8) {
                                 Image(systemName: "drop")
                                     .foregroundStyle(.cyan.opacity(0.6))
-                                Text("Nothing logged yet — pour one in.")
+                                Text("Nothing logged.")
                                     .foregroundStyle(.secondary)
                             }
                         } else {
-                            ForEach(todayEntries) { entry in
+                            ForEach(entriesForDay) { entry in
                                 HStack {
                                     Image(systemName: entry.amountOz < 0 ? "minus.circle.fill" : "drop.fill")
                                         .foregroundStyle(entry.amountOz < 0 ? .red : .cyan)
@@ -476,7 +617,7 @@ struct TodayView: View {
                         }
                     }
                 }
-                .navigationTitle("Today's water")
+                .navigationTitle(sheetTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) {
@@ -489,7 +630,7 @@ struct TodayView: View {
         private func delete(at offsets: IndexSet) {
             Haptic.medium()
             for index in offsets {
-                context.delete(todayEntries[index])
+                context.delete(entriesForDay[index])
             }
         }
 
@@ -508,6 +649,7 @@ struct MealDetailSheet: View {
 
     let mealKey: String
     let mealLabel: String
+    let selectedDate: Date
     let onEditEntry: (FoodEntry) -> Void
     let onSoftDelete: (FoodEntry) -> Void
 
@@ -518,7 +660,7 @@ struct MealDetailSheet: View {
 
     private var entries: [FoodEntry] {
         allEntries.filter {
-            Calendar.current.isDateInToday($0.loggedAt) &&
+            Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) &&
             $0.pendingDeleteAt == nil &&
             $0.mealType == mealKey
         }
@@ -531,6 +673,16 @@ struct MealDetailSheet: View {
              acc.2 + e.carbs    * e.servings,
              acc.3 + e.fat      * e.servings)
         }
+    }
+
+    /// Date to attach to new entries logged from this sheet. If viewing today,
+    /// use .now (real time-of-day); if past, use noon of selectedDate.
+    private var saveDate: Date {
+        let cal = Calendar.current
+        if cal.isDateInToday(selectedDate) {
+            return .now
+        }
+        return cal.date(bySettingHour: 12, minute: 0, second: 0, of: selectedDate) ?? selectedDate
     }
 
     var body: some View {
@@ -619,16 +771,16 @@ struct MealDetailSheet: View {
                 }
             }
             .sheet(isPresented: $showingManual) {
-                ManualEntrySheet(defaultMeal: mealKey)
+                ManualEntrySheet(defaultMeal: mealKey, defaultDate: saveDate)
             }
             .sheet(isPresented: $showingSearch) {
-                SearchSheet(defaultMeal: mealKey)
+                SearchSheet(defaultMeal: mealKey, defaultDate: saveDate)
             }
             .sheet(isPresented: $showingScanner) {
-                BarcodeScannerSheet(defaultMeal: mealKey)
+                BarcodeScannerSheet(defaultMeal: mealKey, defaultDate: saveDate)
             }
             .sheet(isPresented: $showingPhoto) {
-                PhotoLogSheet(defaultMeal: mealKey)
+                PhotoLogSheet(defaultMeal: mealKey, defaultDate: saveDate)
             }
         }
     }

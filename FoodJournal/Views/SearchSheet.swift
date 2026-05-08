@@ -10,10 +10,12 @@ struct SearchSheet: View {
     @Environment(\.modelContext) private var context
 
     let defaultMeal: String?
+        let defaultDate: Date?
 
-    init(defaultMeal: String? = nil) {
-        self.defaultMeal = defaultMeal
-    }
+        init(defaultMeal: String? = nil, defaultDate: Date? = nil) {
+            self.defaultMeal = defaultMeal
+            self.defaultDate = defaultDate
+        }
 
     @State private var query: String = ""
     @State private var libraryResults: [LibraryFood] = []
@@ -140,7 +142,7 @@ struct SearchSheet: View {
             }
             .sheet(item: $pendingPick) { pick in
                             NavigationStack {
-                                ConfirmFoodView(prefill: pick.prefill, source: "search", defaultMeal: defaultMeal) {
+                                ConfirmFoodView(prefill: pick.prefill, source: "search", defaultMeal: defaultMeal, defaultDate: defaultDate) {
                                     pendingPick = nil
                                     dismiss()
                                 }

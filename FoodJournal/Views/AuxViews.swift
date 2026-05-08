@@ -83,22 +83,24 @@ struct ConfirmFoodView: View {
 
     @Environment(\.modelContext) private var context
     let prefill: Prefill
-    let source: String
-    let defaultMeal: String?
-    let onSaved: () -> Void
+        let source: String
+        let defaultMeal: String?
+        let defaultDate: Date?
+        let onSaved: () -> Void
 
-    @State private var grams: Double
-    @State private var mealType: String
-    @State private var showingLateSnackAlert = false
+        @State private var grams: Double
+        @State private var mealType: String
+        @State private var showingLateSnackAlert = false
 
-    init(prefill: Prefill, source: String, defaultMeal: String? = nil, onSaved: @escaping () -> Void) {
-        self.prefill = prefill
-        self.source = source
-        self.defaultMeal = defaultMeal
-        self.onSaved = onSaved
-        _grams = State(initialValue: prefill.servingSizeGrams ?? 100)
-        _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
-    }
+        init(prefill: Prefill, source: String, defaultMeal: String? = nil, defaultDate: Date? = nil, onSaved: @escaping () -> Void) {
+            self.prefill = prefill
+            self.source = source
+            self.defaultMeal = defaultMeal
+            self.defaultDate = defaultDate
+            self.onSaved = onSaved
+            _grams = State(initialValue: prefill.servingSizeGrams ?? 100)
+            _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+        }
 
     private var multiplier: Double { grams / 100 }
 
@@ -231,15 +233,17 @@ struct ConfirmFoodView: View {
             calcium: scaled(prefill.calciumPer100g),
             iron: scaled(prefill.ironPer100g),
             magnesium: scaled(prefill.magnesiumPer100g),
-            mealType: mealType,
-            source: source,
-            barcode: prefill.barcode
-        )
-        context.insert(entry)
-        LibraryFoodUpsert.upsert(from: entry, in: context)
-        onSaved()
-    }
-}
+                    mealType: mealType,
+                    source: source,
+                    barcode: prefill.barcode
+                )
+                if let defaultDate {
+                    entry.loggedAt = defaultDate
+                }
+                context.insert(entry)
+                LibraryFoodUpsert.upsert(from: entry, in: context)
+                onSaved()
+            }}
 
 // MARK: - ManualEntrySheet
 struct ManualEntrySheet: View {
@@ -247,6 +251,19 @@ struct ManualEntrySheet: View {
     @Environment(\.modelContext) private var context
 
     let defaultMeal: String?
+        let defaultDate: Date?
+
+        /// Per-serving = values are for one serving (legacy mode, always how it worked).
+    /// Total amount = values are the totals for the amount typed above. On save we
+    /// divide by `servings` to derive per-serving values, keeping the storage layer
+    /// unchanged. Default is per-serving so existing muscle memory is preserved.
+    enum EntryMode: String, CaseIterable, Identifiable {
+        case perServing = "Per serving"
+        case totalAmount = "Total amount"
+        var id: String { rawValue }
+    }
+
+    @State private var entryMode: EntryMode = .perServing
 
     @State private var name = ""
     @State private var brand = ""
@@ -278,10 +295,11 @@ struct ManualEntrySheet: View {
     @State private var ironStr = ""
     @State private var magnesiumStr = ""
 
-    init(defaultMeal: String? = nil) {
-        self.defaultMeal = defaultMeal
-        _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
-    }
+    init(defaultMeal: String? = nil, defaultDate: Date? = nil) {
+            self.defaultMeal = defaultMeal
+            self.defaultDate = defaultDate
+            _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+        }
 
     var body: some View {
         NavigationStack {
@@ -291,9 +309,17 @@ struct ManualEntrySheet: View {
                     TextField("Brand (optional)", text: $brand)
                 }
 
-                Section("Serving") {
+                Section {
+                    Picker("Mode", selection: $entryMode) {
+                        ForEach(EntryMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+
                     HStack {
-                        Text("Servings")
+                        Text(entryMode == .perServing ? "Servings" : "Amount")
                         Spacer()
                         TextField("1", value: $servings, format: .number)
                             .keyboardType(.decimalPad)
@@ -332,9 +358,16 @@ struct ManualEntrySheet: View {
                         Text("Dinner").tag("dinner")
                         Text("Snack").tag("snack")
                     }
+                } header: {
+                    Text("Serving")
+                } footer: {
+                    Text(entryMode == .perServing
+                         ? "Macros below are per single serving."
+                         : "Macros below are the totals for the amount above.")
+                        .font(.caption)
                 }
 
-                Section("Macros (per serving)") {
+                Section(entryMode == .perServing ? "Macros (per serving)" : "Macros (totals)") {
                     macroField("Calories", value: $calories, suffix: "")
                     macroField("Protein",  value: $protein,  suffix: "g")
                     macroField("Carbs",    value: $carbs,    suffix: "g")
@@ -440,37 +473,46 @@ struct ManualEntrySheet: View {
             return servingUnit
         }()
 
+        // In totals mode, the typed values are the totals across `servings`.
+        // We convert to per-serving by dividing each value by servings.
+        // Per-serving mode keeps values as-typed (divisor = 1).
+        // Guard against divide-by-zero (servings=0 in totals falls back to as-typed).
+        let divisor: Double = (entryMode == .totalAmount && servings > 0) ? servings : 1.0
+
         let entry = FoodEntry(
             name: name,
             brand: brand.isEmpty ? nil : brand,
             servings: servings,
             servingUnit: resolvedUnit,
-            calories: calories,
-            protein: protein,
-            carbs: carbs,
-            fat: fat,
-            saturatedFat: parseOptional(saturatedFatStr),
-            polyunsaturatedFat: parseOptional(polyunsaturatedFatStr),
-            monounsaturatedFat: parseOptional(monounsaturatedFatStr),
-            transFat: parseOptional(transFatStr),
-            fiber: parseOptional(fiberStr),
-            sugar: parseOptional(sugarStr),
-            cholesterol: parseOptional(cholesterolStr),
-            sodium: parseOptional(sodiumStr),
-            potassium: parseOptional(potassiumStr),
-            vitaminA: parseOptional(vitaminAStr),
-            vitaminC: parseOptional(vitaminCStr),
-            vitaminD: parseOptional(vitaminDStr),
-            calcium: parseOptional(calciumStr),
-            iron: parseOptional(ironStr),
-            magnesium: parseOptional(magnesiumStr),
+            calories: calories / divisor,
+            protein: protein / divisor,
+            carbs: carbs / divisor,
+            fat: fat / divisor,
+            saturatedFat: parseOptional(saturatedFatStr).map { $0 / divisor },
+            polyunsaturatedFat: parseOptional(polyunsaturatedFatStr).map { $0 / divisor },
+            monounsaturatedFat: parseOptional(monounsaturatedFatStr).map { $0 / divisor },
+            transFat: parseOptional(transFatStr).map { $0 / divisor },
+            fiber: parseOptional(fiberStr).map { $0 / divisor },
+            sugar: parseOptional(sugarStr).map { $0 / divisor },
+            cholesterol: parseOptional(cholesterolStr).map { $0 / divisor },
+            sodium: parseOptional(sodiumStr).map { $0 / divisor },
+            potassium: parseOptional(potassiumStr).map { $0 / divisor },
+            vitaminA: parseOptional(vitaminAStr).map { $0 / divisor },
+            vitaminC: parseOptional(vitaminCStr).map { $0 / divisor },
+            vitaminD: parseOptional(vitaminDStr).map { $0 / divisor },
+            calcium: parseOptional(calciumStr).map { $0 / divisor },
+            iron: parseOptional(ironStr).map { $0 / divisor },
+            magnesium: parseOptional(magnesiumStr).map { $0 / divisor },
             mealType: mealType,
-            source: "manual"
-        )
-        context.insert(entry)
-        LibraryFoodUpsert.upsert(from: entry, in: context)
-        dismiss()
-    }
+                        source: "manual"
+                    )
+                    if let defaultDate {
+                        entry.loggedAt = defaultDate
+                    }
+                    context.insert(entry)
+                    LibraryFoodUpsert.upsert(from: entry, in: context)
+                    dismiss()
+                }
 
     private func parseOptional(_ s: String) -> Double? {
         let trimmed = s.trimmingCharacters(in: .whitespaces)
@@ -478,7 +520,6 @@ struct ManualEntrySheet: View {
         return Double(trimmed)
     }
 }
-
 // MARK: - SettingsView
 struct SettingsView: View {
     @Environment(\.modelContext) private var context
@@ -500,6 +541,13 @@ struct SettingsView: View {
     @State private var usdaKeySet = false
     @State private var showingResetLibraryAlert = false
     @State private var libraryCount = 0
+
+    // Late-night warning config — backed by UserDefaults via @AppStorage.
+    // Defaults match MealTimeHelper.defaultEnabled / defaultStartHour / defaultEndHour.
+    // These auto-save on change; no Save button needed for this section.
+    @AppStorage("lateNightWarningEnabled")   private var warningEnabled: Bool = true
+    @AppStorage("lateNightWarningStartHour") private var warningStartHour: Int = 20
+    @AppStorage("lateNightWarningEndHour")   private var warningEndHour: Int = 6
 
     var body: some View {
         NavigationStack {
@@ -530,37 +578,62 @@ struct SettingsView: View {
                     }
                 }
 
-                Section("Data") {
-                                    Button {
-                                        showingCSVExport = true
-                                    } label: {
-                                        HStack {
-                                            Text("Export data")
-                                                .foregroundStyle(.primary)
-                                            Spacer()
-                                            Text("CSV")
-                                                .font(.subheadline)
-                                                .foregroundStyle(.secondary)
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    }
+                Section {
+                    Toggle("Warn me about late snacks", isOn: $warningEnabled)
 
-                                    Button {
-                                        libraryCount = countLibrary()
-                                        showingResetLibraryAlert = true
-                                    } label: {
-                                        HStack {
-                                            Text("Reset food library")
-                                                .foregroundStyle(.red)
-                                            Spacer()
-                                            Image(systemName: "chevron.right")
-                                                .font(.caption.weight(.semibold))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                }
+                    if warningEnabled {
+                        Picker("Start", selection: $warningStartHour) {
+                            ForEach(0..<24, id: \.self) { hour in
+                                Text(formatHour(hour)).tag(hour)
+                            }
+                        }
+                        Picker("End", selection: $warningEndHour) {
+                            ForEach(0..<24, id: \.self) { hour in
+                                Text(formatHour(hour)).tag(hour)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Late-night snack alert")
+                } footer: {
+                    if warningEnabled {
+                        Text("Snacks logged between \(formatHour(warningStartHour)) and \(formatHour(warningEndHour)) prompt a confirmation. Other meals are unaffected.")
+                    } else {
+                        Text("Late-night snack saves will not prompt a confirmation.")
+                    }
+                }
+
+                Section("Data") {
+                    Button {
+                        showingCSVExport = true
+                    } label: {
+                        HStack {
+                            Text("Export data")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text("CSV")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    Button {
+                        libraryCount = countLibrary()
+                        showingResetLibraryAlert = true
+                    } label: {
+                        HStack {
+                            Text("Reset food library")
+                                .foregroundStyle(.red)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                }
 
                 Section("API keys") {
                     Button {
@@ -576,21 +649,21 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Save") { save() }
-                            }
-                        }
-                        .alert("Reset food library?", isPresented: $showingResetLibraryAlert) {
-                            Button("Cancel", role: .cancel) { }
-                            Button("Reset", role: .destructive) {
-                                resetLibrary()
-                            }
-                        } message: {
-                            Text("This will erase all \(libraryCount) library record\(libraryCount == 1 ? "" : "s"). Your existing journal entries are not affected. The library will refill itself as you log foods.")
-                        }
-                        .onAppear { reload() }
-                        .sheet(isPresented: $showingNutrientGoals) {
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { save() }
+                }
+            }
+            .alert("Reset food library?", isPresented: $showingResetLibraryAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Reset", role: .destructive) {
+                    resetLibrary()
+                }
+            } message: {
+                Text("This will erase all \(libraryCount) library record\(libraryCount == 1 ? "" : "s"). Your existing journal entries are not affected. The library will refill itself as you log foods.")
+            }
+            .onAppear { reload() }
+            .sheet(isPresented: $showingNutrientGoals) {
                 NutrientGoalsSheet()
             }
             .sheet(isPresented: $showingCSVExport) {
@@ -631,6 +704,17 @@ struct SettingsView: View {
         }
     }
 
+    /// Format a 0–23 hour as "12 AM" / "8 AM" / "12 PM" / "8 PM".
+    private func formatHour(_ hour: Int) -> String {
+        switch hour {
+        case 0:       return "12 AM"
+        case 1...11:  return "\(hour) AM"
+        case 12:      return "12 PM"
+        case 13...23: return "\(hour - 12) PM"
+        default:      return "\(hour):00"
+        }
+    }
+
     private func reload() {
         anthropicKeySet = !KeychainStore.loadAPIKey().isEmpty
         usdaKeySet = !KeychainStore.load(.usda).isEmpty
@@ -644,37 +728,37 @@ struct SettingsView: View {
     }
 
     private func countLibrary() -> Int {
-            let descriptor = FetchDescriptor<LibraryFood>()
-            return (try? context.fetch(descriptor).count) ?? 0
-        }
+        let descriptor = FetchDescriptor<LibraryFood>()
+        return (try? context.fetch(descriptor).count) ?? 0
+    }
 
-        private func resetLibrary() {
-            Haptic.medium()
-            let descriptor = FetchDescriptor<LibraryFood>()
-            guard let foods = try? context.fetch(descriptor) else { return }
-            for f in foods { context.delete(f) }
-        }
+    private func resetLibrary() {
+        Haptic.medium()
+        let descriptor = FetchDescriptor<LibraryFood>()
+        guard let foods = try? context.fetch(descriptor) else { return }
+        for f in foods { context.delete(f) }
+    }
 
-        private func save() {
-            dismissKeyboard()
-            Haptic.light()
-            if let g = goalsList.first {
-                g.calorieGoal = calorieGoal
-                g.proteinGoal = proteinGoal
-                g.carbsGoal   = carbsGoal
-                g.fatGoal     = fatGoal
-                g.waterGoalOz = waterGoalOz
-            } else {
-                context.insert(UserGoals(
-                    calorieGoal: calorieGoal,
-                    proteinGoal: proteinGoal,
-                    carbsGoal:   carbsGoal,
-                    fatGoal:     fatGoal,
-                    waterGoalOz: waterGoalOz
-                ))
-            }
+    private func save() {
+        dismissKeyboard()
+        Haptic.light()
+        if let g = goalsList.first {
+            g.calorieGoal = calorieGoal
+            g.proteinGoal = proteinGoal
+            g.carbsGoal   = carbsGoal
+            g.fatGoal     = fatGoal
+            g.waterGoalOz = waterGoalOz
+        } else {
+            context.insert(UserGoals(
+                calorieGoal: calorieGoal,
+                proteinGoal: proteinGoal,
+                carbsGoal:   carbsGoal,
+                fatGoal:     fatGoal,
+                waterGoalOz: waterGoalOz
+            ))
         }
     }
+}
 
 // MARK: - AnthropicKeySheet
 struct AnthropicKeySheet: View {

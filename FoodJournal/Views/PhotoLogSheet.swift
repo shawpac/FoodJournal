@@ -5,12 +5,14 @@ struct PhotoLogSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
 
-        let defaultMeal: String?
+    let defaultMeal: String?
+            let defaultDate: Date?
 
-    init(defaultMeal: String? = nil) {
-                self.defaultMeal = defaultMeal
-                _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
-            }
+        init(defaultMeal: String? = nil, defaultDate: Date? = nil) {
+                    self.defaultMeal = defaultMeal
+                    self.defaultDate = defaultDate
+                    _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+                }
 
     @State private var image: UIImage?
             @State private var estimate: ClaudeVisionService.Estimate?
@@ -248,12 +250,15 @@ struct PhotoLogSheet: View {
                 iron: e.iron,
                 magnesium: e.magnesium,
                 mealType: mealType,
-                source: "photo"
-            )
-            context.insert(entry)
-            LibraryFoodUpsert.upsert(from: entry, in: context)
-            dismiss()
-        }
+                                source: "photo"
+                            )
+                            if let defaultDate {
+                                entry.loggedAt = defaultDate
+                            }
+                            context.insert(entry)
+                            LibraryFoodUpsert.upsert(from: entry, in: context)
+                            dismiss()
+                        }
 }
 
 private struct EstimateCard: View {
