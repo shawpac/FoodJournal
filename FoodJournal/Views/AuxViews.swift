@@ -1069,8 +1069,9 @@ struct EditEntrySheet: View {
     @State private var isCustomUnit: Bool
     @State private var customUnitText: String
     @State private var mealType: String
+        @State private var loggedAt: Date
 
-    @State private var calories: Double
+        @State private var calories: Double
     @State private var protein: Double
     @State private var carbs: Double
     @State private var fat: Double
@@ -1101,8 +1102,9 @@ struct EditEntrySheet: View {
         _brand = State(initialValue: entry.brand ?? "")
         _servings = State(initialValue: entry.servings)
         _mealType = State(initialValue: entry.mealType)
+                _loggedAt = State(initialValue: entry.loggedAt)
 
-        let isStd = Self.standardUnits.contains(entry.servingUnit)
+                let isStd = Self.standardUnits.contains(entry.servingUnit)
         _servingUnit = State(initialValue: isStd ? entry.servingUnit : "__custom__")
         _isCustomUnit = State(initialValue: !isStd)
         _customUnitText = State(initialValue: isStd ? "" : entry.servingUnit)
@@ -1181,14 +1183,23 @@ struct EditEntrySheet: View {
                     }
 
                     Picker("Meal", selection: $mealType) {
-                        Text("Breakfast").tag("breakfast")
-                        Text("Lunch").tag("lunch")
-                        Text("Dinner").tag("dinner")
-                        Text("Snack").tag("snack")
-                    }
-                }
+                                            Text("Breakfast").tag("breakfast")
+                                            Text("Lunch").tag("lunch")
+                                            Text("Dinner").tag("dinner")
+                                            Text("Snack").tag("snack")
+                                        }
+                                    }
 
-                Section("Macros (per serving)") {
+                                    Section("When") {
+                                        DatePicker(
+                                            "Date logged",
+                                            selection: $loggedAt,
+                                            in: ...Date.now,
+                                            displayedComponents: .date
+                                        )
+                                    }
+
+                                    Section("Macros (per serving)") {
                     macroField("Calories", value: $calories, suffix: "")
                     macroField("Protein",  value: $protein,  suffix: "g")
                     macroField("Carbs",    value: $carbs,    suffix: "g")
@@ -1283,8 +1294,9 @@ struct EditEntrySheet: View {
         entry.brand = brand.isEmpty ? nil : brand
         entry.servings = servings
         entry.servingUnit = resolvedUnit
-        entry.mealType = mealType
-        entry.calories = calories
+                entry.mealType = mealType
+                entry.loggedAt = loggedAt
+                entry.calories = calories
         entry.protein = protein
         entry.carbs = carbs
         entry.fat = fat
