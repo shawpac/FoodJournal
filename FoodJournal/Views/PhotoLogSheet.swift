@@ -6,88 +6,49 @@ struct PhotoLogSheet: View {
     @Environment(\.modelContext) private var context
 
     let defaultMeal: String?
-            let defaultDate: Date?
+    let defaultDate: Date?
 
-        init(defaultMeal: String? = nil, defaultDate: Date? = nil) {
-                    self.defaultMeal = defaultMeal
-                    self.defaultDate = defaultDate
-                    _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
-                    _pastDayLoggedAt = State(initialValue: defaultDate ?? .now)
-                }
+    init(defaultMeal: String? = nil, defaultDate: Date? = nil) {
+        self.defaultMeal = defaultMeal
+        self.defaultDate = defaultDate
+        _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+        _pastDayLoggedAt = State(initialValue: defaultDate ?? .now)
+    }
 
-    @State private var image: UIImage?
-            @State private var estimate: ClaudeVisionService.Estimate?
-            @State private var isAnalyzing = false
-            @State private var errorMessage: String?
-            @State private var mealType: String
-            @State private var showingCamera = false
-            @State private var showingLateSnackAlert = false
-            /// Editable timestamp shown only when logging to a past day.
-            @State private var pastDayLoggedAt: Date
+    /// User can attach up to this many angles. Higher values increase token cost
+    /// per analyze call without much accuracy lift in practice.
+    private let maxPhotos = 3
+
+    @State private var images: [UIImage] = []
+    /// Camera writes here; .onDisappear transfers into `images` so the picker
+    /// itself doesn't need to know about the array.
+    @State private var newPhotoBuffer: UIImage?
+
+    @State private var estimate: ClaudeVisionService.Estimate?
+    @State private var isAnalyzing = false
+    @State private var errorMessage: String?
+    @State private var mealType: String
+    @State private var showingCamera = false
+    @State private var showingLateSnackAlert = false
+    /// Editable timestamp shown only when logging to a past day.
+    @State private var pastDayLoggedAt: Date
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
-                    if let image {
-                                            Image(uiImage: image)
-                                                .resizable()
-                                                .scaledToFit()
-                                                .frame(maxHeight: 280)
-                                                .clipShape(RoundedRectangle(cornerRadius: 16))
-
-                                            // Show Analyze + Pick different photo buttons when we have an image
-                                            // but haven't analyzed it yet (and aren't currently analyzing).
-                                            if estimate == nil && !isAnalyzing {
-                                                HStack(spacing: 8) {
-                                                                                Button {
-                                                                                    showingCamera = true
-                                                                                } label: {
-                                                                                    Text("Retake")
-                                                                                        .font(.subheadline.weight(.medium))
-                                                                                        .frame(maxWidth: .infinity)
-                                                                                        .padding(.vertical, 12)
-                                                                                        .background(Color(.secondarySystemGroupedBackground),
-                                                                                                    in: RoundedRectangle(cornerRadius: 12))
-                                                                                        .foregroundStyle(.primary)
-                                                                                }
-                                                                                .buttonStyle(.plain)
-
-                                                                                Button {
-                                                                                    Task { await analyze(image) }
-                                                                                } label: {
-                                                                                    Text("Analyze")
-                                                                                        .font(.subheadline.weight(.semibold))
-                                                                                        .frame(maxWidth: .infinity)
-                                                                                        .padding(.vertical, 12)
-                                                                                        .background(.pink, in: RoundedRectangle(cornerRadius: 12))
-                                                                                        .foregroundStyle(.white)
-                                                                                }
-                                                                                .buttonStyle(.plain)
-                                                                            }
-                                            }
+                    if images.isEmpty {
+                        takePhotoCTA
                     } else {
-                                            Button {
-                                                showingCamera = true
-                                            } label: {
-                                                VStack(spacing: 8) {
-                                                    Image(systemName: "camera.fill")
-                                                        .font(.system(size: 44))
-                                                    Text("Take a photo of your meal")
-                                                        .font(.subheadline)
-                                                }
-                                                .foregroundStyle(.secondary)
-                                                .frame(maxWidth: .infinity, minHeight: 220)
-                                                .background(Color(.secondarySystemGroupedBackground),
-                                                            in: RoundedRectangle(cornerRadius: 16))
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
+                        photoStrip
 
-                                        if isAnalyzing {
-                                            ProgressView("Asking Claude…")
-                                                .padding(.top, 12)
-                                        }
+                        if isAnalyzing {
+                            ProgressView("Asking Claude…")
+                                .padding(.top, 12)
+                        } else if estimate == nil {
+                            analyzeButton
+                        }
+                    }
 
                     if let errorMessage {
                         Text(errorMessage)
@@ -98,6 +59,10 @@ struct PhotoLogSheet: View {
                     }
 
                     if let estimate {
+                        if estimate.confidence.lowercased() == "low" {
+                            lowConfidenceCard
+                        }
+
                         EstimateCard(estimate: estimate)
 
                         Picker("Meal", selection: $mealType) {
@@ -128,16 +93,16 @@ struct PhotoLogSheet: View {
                         }
 
                         Button {
-                                                    attemptSave(estimate)
-                                                } label: {
-                                                    Text("Log this")
-                                                        .font(.headline)
-                                                        .frame(maxWidth: .infinity)
-                                                        .padding(.vertical, 12)
-                                                }
-                                                .buttonStyle(.borderedProminent)
-                                                .tint(.orange)
-                                            }
+                            attemptSave(estimate)
+                        } label: {
+                            Text("Log this")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                    }
                 }
                 .padding()
             }
@@ -149,63 +114,235 @@ struct PhotoLogSheet: View {
                 }
             }
             .onAppear {
-                            if image == nil {
-                                showingCamera = true
-                            }
-                        }
-            .fullScreenCover(isPresented: $showingCamera) {
-                                        CameraPicker(image: $image)
-                                            .ignoresSafeArea()
-                                            .onDisappear {
-                                                // Clear stale estimate so the Analyze button reappears for the new photo.
-                                                if estimate != nil { estimate = nil }
-                                            }
-                                    }
-                        .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
-                            Button("Cancel", role: .cancel) { }
-                            Button("Log it anyway") {
-                                if let e = estimate { saveEntry(e) }
-                            }
-                        } message: {
-                            Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
-                        }
-                    }
+                if images.isEmpty {
+                    showingCamera = true
                 }
-    private func analyze(_ img: UIImage) async {
-            // Compute the hash first so we can check the cache.
-            guard let prepared = ClaudeVisionService.prepareImage(img) else {
-                errorMessage = "Could not encode image."
-                return
             }
-            let imageHash = prepared.hash
+            .fullScreenCover(isPresented: $showingCamera) {
+                CameraPicker(image: $newPhotoBuffer)
+                    .ignoresSafeArea()
+                    .onDisappear {
+                        if let img = newPhotoBuffer, images.count < maxPhotos {
+                            images.append(img)
+                            // Stale estimate — fresh photo set means re-analyze.
+                            if estimate != nil { estimate = nil }
+                        }
+                        newPhotoBuffer = nil
+                    }
+            }
+            .alert("Late-night snack?", isPresented: $showingLateSnackAlert) {
+                Button("Cancel", role: .cancel) { }
+                Button("Log it anyway") {
+                    if let e = estimate { saveEntry(e) }
+                }
+            } message: {
+                Text("It's getting late. Eating this close to bed can affect sleep quality and digestion. Consider whether you really need it.")
+            }
+        }
+    }
 
-            // Cache hit?
+    // MARK: - Subviews
+
+    private var takePhotoCTA: some View {
+        Button {
+            showingCamera = true
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: "camera.fill")
+                    .font(.system(size: 44))
+                Text("Take a photo of your meal")
+                    .font(.subheadline)
+            }
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 220)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var photoStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(Array(images.enumerated()), id: \.offset) { idx, img in
+                    photoThumb(img: img, index: idx)
+                }
+                if images.count < maxPhotos {
+                    Button {
+                        showingCamera = true
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.title2)
+                            Text("Add angle")
+                                .font(.caption2)
+                        }
+                        .foregroundStyle(.secondary)
+                        .frame(width: 110, height: 110)
+                        .background(Color(.secondarySystemGroupedBackground),
+                                    in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func photoThumb(img: UIImage, index: Int) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFill()
+                .frame(width: 110, height: 110)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+
+            Button {
+                images.remove(at: index)
+                if estimate != nil { estimate = nil }
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.75))
+            }
+            .padding(4)
+        }
+    }
+
+    private var analyzeButton: some View {
+        Button {
+            Task { await analyze(force: false) }
+        } label: {
+            Text("Analyze \(images.count == 1 ? "photo" : "\(images.count) photos")")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(.pink, in: RoundedRectangle(cornerRadius: 12))
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var lowConfidenceCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("Low confidence")
+                    .font(.subheadline.weight(.semibold))
+            }
+            Text("Claude flagged this estimate as uncertain. Add another angle or re-analyze to try again.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                if images.count < maxPhotos {
+                    Button {
+                        showingCamera = true
+                    } label: {
+                        Text("Add angle")
+                            .font(.subheadline.weight(.medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(Color(.tertiarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 10))
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button {
+                    Task { await analyze(force: true) }
+                } label: {
+                    Text("Re-analyze")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(.orange, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(12)
+        .background(Color.orange.opacity(0.1),
+                    in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    // MARK: - Analyze
+
+    /// Calls Claude with the current image set. When `force` is true, bypasses
+    /// the on-device CachedPhotoEstimate cache so the user gets a fresh sample —
+    /// used by the low-confidence "Re-analyze" button. The cache entry is
+    /// updated in place on success.
+    private func analyze(force: Bool) async {
+        guard !images.isEmpty else {
+            errorMessage = "Take a photo first."
+            return
+        }
+        guard let prepared = ClaudeVisionService.prepareImages(images) else {
+            errorMessage = "Could not encode image(s)."
+            return
+        }
+        let cacheKey = prepared.hash
+
+        if !force {
             let descriptor = FetchDescriptor<CachedPhotoEstimate>(
-                predicate: #Predicate { $0.imageHash == imageHash }
+                predicate: #Predicate { $0.imageHash == cacheKey }
             )
             if let cached = try? context.fetch(descriptor).first {
                 print("PhotoLogSheet: cache hit, skipping API call")
                 estimate = cached.toEstimate()
                 return
             }
+        }
 
-            // Cache miss — go to the API.
-            let key = KeychainStore.loadAPIKey()
-            guard !key.isEmpty else {
-                errorMessage = "Add your Anthropic API key in Settings first."
-                return
-            }
-            isAnalyzing = true
-            errorMessage = nil
-            estimate = nil
-            defer { isAnalyzing = false }
-            do {
-                let result = try await ClaudeVisionService.estimate(image: img, apiKey: key)
-                estimate = result
+        let key = KeychainStore.loadAPIKey()
+        guard !key.isEmpty else {
+            errorMessage = "Add your Anthropic API key in Settings first."
+            return
+        }
+        isAnalyzing = true
+        errorMessage = nil
+        estimate = nil
+        defer { isAnalyzing = false }
+        do {
+            let result = try await ClaudeVisionService.estimate(images: images, apiKey: key)
+            estimate = result
 
-                // Save to cache so the same photo doesn't cost again next time.
+            // Upsert the cache. Re-analyze hits the existing-row branch and
+            // overwrites in place so the next cache hit reflects the new result.
+            let descriptor = FetchDescriptor<CachedPhotoEstimate>(
+                predicate: #Predicate { $0.imageHash == cacheKey }
+            )
+            if let existing = try? context.fetch(descriptor).first {
+                existing.name = result.name
+                existing.servings = result.servings
+                existing.servingUnit = result.serving_unit
+                existing.calories = result.calories
+                existing.protein = result.protein
+                existing.carbs = result.carbs
+                existing.fat = result.fat
+                existing.saturatedFat = result.saturated_fat
+                existing.polyunsaturatedFat = result.polyunsaturated_fat
+                existing.monounsaturatedFat = result.monounsaturated_fat
+                existing.transFat = result.trans_fat
+                existing.fiber = result.fiber
+                existing.sugar = result.sugar
+                existing.cholesterol = result.cholesterol
+                existing.sodium = result.sodium
+                existing.potassium = result.potassium
+                existing.vitaminA = result.vitamin_a
+                existing.vitaminC = result.vitamin_c
+                existing.vitaminD = result.vitamin_d
+                existing.calcium = result.calcium
+                existing.iron = result.iron
+                existing.magnesium = result.magnesium
+                existing.confidence = result.confidence
+                existing.notes = result.notes
+                existing.cachedAt = .now
+            } else {
                 let cache = CachedPhotoEstimate(
-                    imageHash: imageHash,
+                    imageHash: cacheKey,
                     name: result.name,
                     servings: result.servings,
                     servingUnit: result.serving_unit,
@@ -232,56 +369,59 @@ struct PhotoLogSheet: View {
                     notes: result.notes
                 )
                 context.insert(cache)
-            } catch let serviceError as ClaudeVisionService.ServiceError {
-                errorMessage = serviceError.errorDescription ?? "Unknown error"
-            } catch {
-                errorMessage = "Estimate failed: \(error.localizedDescription)"
             }
+        } catch let serviceError as ClaudeVisionService.ServiceError {
+            errorMessage = serviceError.errorDescription ?? "Unknown error"
+        } catch {
+            errorMessage = "Estimate failed: \(error.localizedDescription)"
         }
+    }
+
     private func attemptSave(_ e: ClaudeVisionService.Estimate) {
-            if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
-                showingLateSnackAlert = true
-            } else {
-                saveEntry(e)
-            }
+        if MealTimeHelper.shouldWarnAboutLateSnack(meal: mealType) {
+            showingLateSnackAlert = true
+        } else {
+            saveEntry(e)
         }
+    }
+
     private func saveEntry(_ e: ClaudeVisionService.Estimate) {
-            dismissKeyboard()
-            Haptic.success()
-            let entry = FoodEntry(
-                name: e.name,
-                servings: e.servings,
-                servingUnit: e.serving_unit,
-                calories: e.calories,
-                protein: e.protein,
-                carbs: e.carbs,
-                fat: e.fat,
-                saturatedFat: e.saturated_fat,
-                polyunsaturatedFat: e.polyunsaturated_fat,
-                monounsaturatedFat: e.monounsaturated_fat,
-                transFat: e.trans_fat,
-                fiber: e.fiber,
-                sugar: e.sugar,
-                cholesterol: e.cholesterol,
-                sodium: e.sodium,
-                potassium: e.potassium,
-                vitaminA: e.vitamin_a,
-                vitaminC: e.vitamin_c,
-                vitaminD: e.vitamin_d,
-                calcium: e.calcium,
-                iron: e.iron,
-                magnesium: e.magnesium,
-                mealType: mealType,
-                                source: "photo"
-                            )
-                            if defaultDate != nil {
-                                entry.loggedAt = pastDayLoggedAt
-                            }
-                            context.insert(entry)
-                            LibraryFoodUpsert.upsert(from: entry, in: context)
-                            HealthSync.onFoodSaved(entry)
-                            dismiss()
-                        }
+        dismissKeyboard()
+        Haptic.success()
+        let entry = FoodEntry(
+            name: e.name,
+            servings: e.servings,
+            servingUnit: e.serving_unit,
+            calories: e.calories,
+            protein: e.protein,
+            carbs: e.carbs,
+            fat: e.fat,
+            saturatedFat: e.saturated_fat,
+            polyunsaturatedFat: e.polyunsaturated_fat,
+            monounsaturatedFat: e.monounsaturated_fat,
+            transFat: e.trans_fat,
+            fiber: e.fiber,
+            sugar: e.sugar,
+            cholesterol: e.cholesterol,
+            sodium: e.sodium,
+            potassium: e.potassium,
+            vitaminA: e.vitamin_a,
+            vitaminC: e.vitamin_c,
+            vitaminD: e.vitamin_d,
+            calcium: e.calcium,
+            iron: e.iron,
+            magnesium: e.magnesium,
+            mealType: mealType,
+            source: "photo"
+        )
+        if defaultDate != nil {
+            entry.loggedAt = pastDayLoggedAt
+        }
+        context.insert(entry)
+        LibraryFoodUpsert.upsert(from: entry, in: context)
+        HealthSync.onFoodSaved(entry)
+        dismiss()
+    }
 }
 
 private struct EstimateCard: View {
@@ -334,6 +474,7 @@ private struct EstimateCard: View {
         }
     }
 }
+
 // MARK: - CameraPicker
 // Wraps UIImagePickerController so SwiftUI can present the system camera UI.
 // Camera is only available on real devices, never on the simulator — that's
