@@ -92,6 +92,9 @@ struct ConfirmFoodView: View {
         @State private var mealType: String
         @State private var showingLateSnackAlert = false
 
+        /// Editable timestamp shown only when logging to a past day.
+        @State private var pastDayLoggedAt: Date
+
         init(prefill: Prefill, source: String, defaultMeal: String? = nil, defaultDate: Date? = nil, onSaved: @escaping () -> Void) {
             self.prefill = prefill
             self.source = source
@@ -100,6 +103,7 @@ struct ConfirmFoodView: View {
             self.onSaved = onSaved
             _grams = State(initialValue: prefill.servingSizeGrams ?? 100)
             _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+            _pastDayLoggedAt = State(initialValue: defaultDate ?? .now)
         }
 
     private var multiplier: Double { grams / 100 }
@@ -131,6 +135,21 @@ struct ConfirmFoodView: View {
                     Text("Lunch").tag("lunch")
                     Text("Dinner").tag("dinner")
                     Text("Snack").tag("snack")
+                }
+            }
+
+            if defaultDate != nil {
+                Section {
+                    DatePicker(
+                        "Time logged",
+                        selection: $pastDayLoggedAt,
+                        in: ...Date.now,
+                        displayedComponents: .hourAndMinute
+                    )
+                } header: {
+                    Text("When")
+                } footer: {
+                    Text("Saved on the selected past day. Pick the actual time you ate.")
                 }
             }
 
@@ -237,8 +256,8 @@ struct ConfirmFoodView: View {
                     source: source,
                     barcode: prefill.barcode
                 )
-                if let defaultDate {
-                    entry.loggedAt = defaultDate
+                if defaultDate != nil {
+                    entry.loggedAt = pastDayLoggedAt
                 }
                 context.insert(entry)
                 LibraryFoodUpsert.upsert(from: entry, in: context)
@@ -275,6 +294,11 @@ struct ManualEntrySheet: View {
     @State private var mealType: String
     @State private var showingLateSnackAlert = false
 
+    /// Editable timestamp shown only when logging to a past day. Initialized
+    /// from defaultDate (which is noon-of-day) so the user can dial in the
+    /// real time before saving. Today flows ignore this and use .now.
+    @State private var pastDayLoggedAt: Date = .now
+
     @State private var calories: Double = 0
     @State private var protein:  Double = 0
     @State private var carbs:    Double = 0
@@ -300,6 +324,7 @@ struct ManualEntrySheet: View {
             self.defaultMeal = defaultMeal
             self.defaultDate = defaultDate
             _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+            _pastDayLoggedAt = State(initialValue: defaultDate ?? .now)
         }
 
     var body: some View {
@@ -308,6 +333,21 @@ struct ManualEntrySheet: View {
                 Section("Food") {
                     TextField("Name", text: $name)
                     TextField("Brand (optional)", text: $brand)
+                }
+
+                if defaultDate != nil {
+                    Section {
+                        DatePicker(
+                            "Time logged",
+                            selection: $pastDayLoggedAt,
+                            in: ...Date.now,
+                            displayedComponents: .hourAndMinute
+                        )
+                    } header: {
+                        Text("When")
+                    } footer: {
+                        Text("This entry will be saved on the selected past day. Pick the actual time you ate.")
+                    }
                 }
 
                 Section {
@@ -507,8 +547,8 @@ struct ManualEntrySheet: View {
             mealType: mealType,
                         source: "manual"
                     )
-                    if let defaultDate {
-                        entry.loggedAt = defaultDate
+                    if defaultDate != nil {
+                        entry.loggedAt = pastDayLoggedAt
                     }
                     context.insert(entry)
                     LibraryFoodUpsert.upsert(from: entry, in: context)
@@ -1527,6 +1567,12 @@ struct EditEntrySheet: View {
                                             selection: $loggedAt,
                                             in: ...Date.now,
                                             displayedComponents: .date
+                                        )
+                                        DatePicker(
+                                            "Time logged",
+                                            selection: $loggedAt,
+                                            in: ...Date.now,
+                                            displayedComponents: .hourAndMinute
                                         )
                                     }
 

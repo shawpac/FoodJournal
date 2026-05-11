@@ -12,6 +12,7 @@ struct PhotoLogSheet: View {
                     self.defaultMeal = defaultMeal
                     self.defaultDate = defaultDate
                     _mealType = State(initialValue: defaultMeal ?? MealTimeHelper.mealType())
+                    _pastDayLoggedAt = State(initialValue: defaultDate ?? .now)
                 }
 
     @State private var image: UIImage?
@@ -21,6 +22,8 @@ struct PhotoLogSheet: View {
             @State private var mealType: String
             @State private var showingCamera = false
             @State private var showingLateSnackAlert = false
+            /// Editable timestamp shown only when logging to a past day.
+            @State private var pastDayLoggedAt: Date
 
     var body: some View {
         NavigationStack {
@@ -104,6 +107,25 @@ struct PhotoLogSheet: View {
                             Text("Snack").tag("snack")
                         }
                         .pickerStyle(.segmented)
+
+                        if defaultDate != nil {
+                            HStack {
+                                Text("Time logged")
+                                    .font(.subheadline)
+                                Spacer()
+                                DatePicker(
+                                    "",
+                                    selection: $pastDayLoggedAt,
+                                    in: ...Date.now,
+                                    displayedComponents: .hourAndMinute
+                                )
+                                .labelsHidden()
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 10)
+                            .background(Color(.secondarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 12))
+                        }
 
                         Button {
                                                     attemptSave(estimate)
@@ -252,8 +274,8 @@ struct PhotoLogSheet: View {
                 mealType: mealType,
                                 source: "photo"
                             )
-                            if let defaultDate {
-                                entry.loggedAt = defaultDate
+                            if defaultDate != nil {
+                                entry.loggedAt = pastDayLoggedAt
                             }
                             context.insert(entry)
                             LibraryFoodUpsert.upsert(from: entry, in: context)
