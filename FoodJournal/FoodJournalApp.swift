@@ -1,8 +1,11 @@
 import SwiftUI
 import SwiftData
+import UserNotifications
 
 @main
 struct FoodJournalApp: App {
+    @State private var notificationCoordinator = NotificationCoordinator()
+
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
                     FoodEntry.self,
@@ -24,6 +27,10 @@ struct FoodJournalApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .environment(notificationCoordinator)
+                .task {
+                    UNUserNotificationCenter.current().delegate = notificationCoordinator
+                }
         }
         .modelContainer(sharedModelContainer)
     }

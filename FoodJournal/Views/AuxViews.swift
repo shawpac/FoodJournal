@@ -559,6 +559,22 @@ struct SettingsView: View {
     @AppStorage("mealDinnerStart")    private var dinnerStart:    Int = 17
     @AppStorage("mealDinnerEnd")      private var dinnerEnd:      Int = 20
 
+    // Daily meal reminders — disabled by default. Each meal has its own on/off
+    // toggle and time (hour + minute). Toggling ON triggers an iOS permission
+    // prompt the first time; denial reverts the toggle and surfaces an alert
+    // with a deep link into the system Settings app.
+    @AppStorage("notifyBreakfastEnabled") private var notifyBreakfast: Bool = false
+    @AppStorage("notifyBreakfastHour")    private var notifyBreakfastHour: Int = 8
+    @AppStorage("notifyBreakfastMinute")  private var notifyBreakfastMinute: Int = 0
+    @AppStorage("notifyLunchEnabled")     private var notifyLunch: Bool = false
+    @AppStorage("notifyLunchHour")        private var notifyLunchHour: Int = 12
+    @AppStorage("notifyLunchMinute")      private var notifyLunchMinute: Int = 30
+    @AppStorage("notifyDinnerEnabled")    private var notifyDinner: Bool = false
+    @AppStorage("notifyDinnerHour")       private var notifyDinnerHour: Int = 18
+    @AppStorage("notifyDinnerMinute")     private var notifyDinnerMinute: Int = 30
+
+    @State private var showingPermissionAlert = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -629,6 +645,34 @@ struct SettingsView: View {
                     Text("Hours outside these windows default to Snack. Each window can wrap midnight (e.g. Dinner 22:00–02:00). New entries logged without an explicit meal context use this schedule.")
                 }
 
+                Section {
+                    reminderRow(
+                        label: "Breakfast",
+                        enabled: $notifyBreakfast,
+                        hour: $notifyBreakfastHour,
+                        minute: $notifyBreakfastMinute,
+                        meal: "breakfast"
+                    )
+                    reminderRow(
+                        label: "Lunch",
+                        enabled: $notifyLunch,
+                        hour: $notifyLunchHour,
+                        minute: $notifyLunchMinute,
+                        meal: "lunch"
+                    )
+                    reminderRow(
+                        label: "Dinner",
+                        enabled: $notifyDinner,
+                        hour: $notifyDinnerHour,
+                        minute: $notifyDinnerMinute,
+                        meal: "dinner"
+                    )
+                } header: {
+                    Text("Reminders")
+                } footer: {
+                    Text("Daily notifications nudging you to log each meal. Tap a notification to jump straight to that meal. Off by default.")
+                }
+
                 Section("Data") {
                     Button {
                         showingCSVExport = true
@@ -687,6 +731,12 @@ struct SettingsView: View {
                 }
             } message: {
                 Text("This will erase all \(libraryCount) library record\(libraryCount == 1 ? "" : "s"). Your existing journal entries are not affected. The library will refill itself as you log foods.")
+            }
+            .alert("Notifications are off", isPresented: $showingPermissionAlert) {
+                Button("Open Settings") { openSystemSettings() }
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("To get meal reminders, allow notifications for FoodJournal in the Settings app.")
             }
             .onAppear { reload() }
             .sheet(isPresented: $showingNutrientGoals) {
@@ -772,6 +822,112 @@ struct SettingsView: View {
         lunchEnd       = MealTimeHelper.defaultLunchEnd
         dinnerStart    = MealTimeHelper.defaultDinnerStart
         dinnerEnd      = MealTimeHelper.defaultDinnerEnd
+    }
+
+    // MARK: - Reminders
+
+    @ViewBuilder
+    private func reminderRow(
+        label: String,
+        enabled: Binding<Bool>,
+        hour: Binding<Int>,
+        minute: Binding<Int>,
+        meal: String
+    ) -> some View {
+        VStack(spacing: 8) {
+            Toggle(label, isOn: enabled)
+                .onChange(of: enabled.wrappedValue) { _, newValue in
+                    handleReminderToggle(
+                        enabled: newValue,
+                        meal: meal,
+                        hour: hour.wrappedValue,
+                        minute: minute.wrappedValue,
+                        revert: { enabled.wrappedValue = false }
+                    )
+                }
+            if enabled.wrappedValue {
+                DatePicker(
+                    "Time",
+                    selection: timeBinding(hour: hour, minute: minute),
+                    displayedComponents: .hourAndMinute
+                )
+                .onChange(of: hour.wrappedValue) { _, _ in
+                    if enabled.wrappedValue {
+                        NotificationService.scheduleMealReminder(
+                            meal: meal,
+                            hour: hour.wrappedValue,
+                            minute: minute.wrappedValue
+                        )
+                    }
+                }
+                .onChange(of: minute.wrappedValue) { _, _ in
+                    if enabled.wrappedValue {
+                        NotificationService.scheduleMealReminder(
+                            meal: meal,
+                            hour: hour.wrappedValue,
+                            minute: minute.wrappedValue
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func timeBinding(hour: Binding<Int>, minute: Binding<Int>) -> Binding<Date> {
+        Binding<Date>(
+            get: {
+                let comps = DateComponents(hour: hour.wrappedValue, minute: minute.wrappedValue)
+                return Calendar.current.date(from: comps) ?? Date()
+            },
+            set: { newDate in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                hour.wrappedValue = comps.hour ?? 0
+                minute.wrappedValue = comps.minute ?? 0
+            }
+        )
+    }
+
+    private func handleReminderToggle(
+        enabled: Bool,
+        meal: String,
+        hour: Int,
+        minute: Int,
+        revert: @escaping () -> Void
+    ) {
+        if !enabled {
+            NotificationService.cancelMealReminder(meal: meal)
+            return
+        }
+        Task {
+            let status = await NotificationService.authorizationStatus()
+            switch status {
+            case .notDetermined:
+                let granted = await NotificationService.requestAuthorization()
+                if granted {
+                    NotificationService.scheduleMealReminder(meal: meal, hour: hour, minute: minute)
+                } else {
+                    await MainActor.run {
+                        revert()
+                        showingPermissionAlert = true
+                    }
+                }
+            case .denied:
+                await MainActor.run {
+                    revert()
+                    showingPermissionAlert = true
+                }
+            case .authorized, .provisional, .ephemeral:
+                NotificationService.scheduleMealReminder(meal: meal, hour: hour, minute: minute)
+            @unknown default:
+                await MainActor.run { revert() }
+            }
+        }
+    }
+
+    private func openSystemSettings() {
+        if let url = URL(string: UIApplication.openSettingsURLString) {
+            UIApplication.shared.open(url)
+        }
     }
 
     private func reload() {

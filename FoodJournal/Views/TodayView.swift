@@ -8,6 +8,11 @@ struct TodayView: View {
         /// tab can read the same date. All cards and queries filter to entries on
         /// this day.
         @Binding var selectedDate: Date
+
+    /// Set by RootView when a notification deep-link wants Today to open a
+    /// specific MealDetailSheet. We consume it in .onChange and clear it.
+    @Binding var pendingMealKey: String?
+
     @State private var showingDatePicker = false
 
     @State private var customWaterAmount: String = ""
@@ -184,6 +189,19 @@ struct TodayView: View {
                     onEditEntry: { entry in entryToEdit = entry },
                     onSoftDelete: softDelete
                 )
+            }
+            .onChange(of: pendingMealKey) { _, newValue in
+                guard let meal = newValue else { return }
+                openMeal = meal
+                pendingMealKey = nil
+            }
+            .onAppear {
+                // Handle the launch-from-notification case: RootView may have
+                // set pendingMealKey before TodayView mounted.
+                if let meal = pendingMealKey {
+                    openMeal = meal
+                    pendingMealKey = nil
+                }
             }
         }
     }
