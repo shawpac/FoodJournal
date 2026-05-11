@@ -45,6 +45,11 @@ final class FoodEntry: Identifiable {
         var barcode: String?
         var pendingDeleteAt: Date?       // soft-delete timestamp; commits after undo window expires
 
+    /// UUID of the HKCorrelation written to Apple Health for this entry.
+    /// Nil when not synced (Health sync disabled at save time, or write failed).
+    /// Used to delete the matching Health correlation when this entry is removed/edited.
+    var healthSampleID: String?
+
     init(
         name: String,
         brand: String? = nil,
@@ -73,7 +78,8 @@ final class FoodEntry: Identifiable {
         mealType: String = "snack",
         source: String = "manual",
         barcode: String? = nil,
-        pendingDeleteAt: Date? = nil
+        pendingDeleteAt: Date? = nil,
+        healthSampleID: String? = nil
     ) {
         self.id = UUID()
         self.name = name
@@ -104,6 +110,7 @@ final class FoodEntry: Identifiable {
         self.source = source
         self.barcode = barcode
         self.pendingDeleteAt = pendingDeleteAt
+        self.healthSampleID = healthSampleID
     }
 }
 
@@ -188,12 +195,14 @@ final class WaterEntry {
     var amountOz: Double
     var loggedAt: Date
     var pendingDeleteAt: Date?       // soft-delete timestamp; commits after undo window expires
+    var healthSampleID: String?      // UUID of the matching HK dietaryWater sample, if synced
 
-    init(amountOz: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil) {
+    init(amountOz: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil, healthSampleID: String? = nil) {
         self.id = UUID()
         self.amountOz = amountOz
         self.loggedAt = loggedAt
         self.pendingDeleteAt = pendingDeleteAt
+        self.healthSampleID = healthSampleID
     }
 }
 
@@ -203,12 +212,19 @@ final class WeightEntry {
     var weightLbs: Double
     var loggedAt: Date
     var pendingDeleteAt: Date?
+    var healthSampleID: String?      // UUID of the matching HK bodyMass sample, if synced
+    /// True when this record was imported from Apple Health (not originated in-app).
+    /// Used to gate delete-sync: imported entries should NOT delete the source Health
+    /// sample on commit-delete, since the user didn't create it here.
+    var importedFromHealth: Bool
 
-    init(weightLbs: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil) {
+    init(weightLbs: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil, healthSampleID: String? = nil, importedFromHealth: Bool = false) {
         self.id = UUID()
         self.weightLbs = weightLbs
         self.loggedAt = loggedAt
         self.pendingDeleteAt = pendingDeleteAt
+        self.healthSampleID = healthSampleID
+        self.importedFromHealth = importedFromHealth
     }
 }
 @Model

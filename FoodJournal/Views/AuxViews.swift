@@ -242,6 +242,7 @@ struct ConfirmFoodView: View {
                 }
                 context.insert(entry)
                 LibraryFoodUpsert.upsert(from: entry, in: context)
+                HealthSync.onFoodSaved(entry)
                 onSaved()
             }}
 
@@ -511,6 +512,7 @@ struct ManualEntrySheet: View {
                     }
                     context.insert(entry)
                     LibraryFoodUpsert.upsert(from: entry, in: context)
+                    HealthSync.onFoodSaved(entry)
                     dismiss()
                 }
 
@@ -574,6 +576,16 @@ struct SettingsView: View {
     @AppStorage("notifyDinnerMinute")     private var notifyDinnerMinute: Int = 30
 
     @State private var showingPermissionAlert = false
+
+    // Apple Health sync — master toggle. Disabled by default. First toggle ON
+    // triggers HealthKit's per-type permission sheet (NotificationService.swift's
+    // pattern for permission). Writes are gated by this flag; deletes always
+    // attempt when an entry has a populated healthSampleID.
+    @AppStorage("healthSyncEnabled") private var healthSyncEnabled: Bool = false
+
+    @State private var showingHealthPermissionAlert = false
+    @State private var importingWeights = false
+    @State private var importSummary: String?
 
     var body: some View {
         NavigationStack {
@@ -673,6 +685,42 @@ struct SettingsView: View {
                     Text("Daily notifications nudging you to log each meal. Tap a notification to jump straight to that meal. Off by default.")
                 }
 
+                Section {
+                    Toggle("Sync to Apple Health", isOn: $healthSyncEnabled)
+                        .onChange(of: healthSyncEnabled) { _, newValue in
+                            handleHealthToggle(enabled: newValue)
+                        }
+                    if healthSyncEnabled {
+                        Button {
+                            importWeightsFromHealth()
+                        } label: {
+                            HStack {
+                                if importingWeights {
+                                    ProgressView()
+                                    Text("Importing…")
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text("Import weight from Apple Health")
+                                        .foregroundStyle(.primary)
+                                }
+                                Spacer()
+                                Image(systemName: "arrow.down.circle")
+                                    .foregroundStyle(.green)
+                            }
+                        }
+                        .disabled(importingWeights)
+                        if let importSummary {
+                            Text(importSummary)
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                    }
+                } header: {
+                    Text("Apple Health")
+                } footer: {
+                    Text("When enabled, new food, water, and weight entries are mirrored to the Health app. Edits and deletes are kept in sync. Off by default.")
+                }
+
                 Section("Data") {
                     Button {
                         showingCSVExport = true
@@ -737,6 +785,12 @@ struct SettingsView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("To get meal reminders, allow notifications for FoodJournal in the Settings app.")
+            }
+            .alert("Apple Health access denied", isPresented: $showingHealthPermissionAlert) {
+                Button("Open Settings") { openSystemSettings() }
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("To sync to Apple Health, allow access in the Settings app under Privacy & Security → Health.")
             }
             .onAppear { reload() }
             .sheet(isPresented: $showingNutrientGoals) {
@@ -927,6 +981,67 @@ struct SettingsView: View {
     private func openSystemSettings() {
         if let url = URL(string: UIApplication.openSettingsURLString) {
             UIApplication.shared.open(url)
+        }
+    }
+
+    // MARK: - Apple Health
+
+    private func handleHealthToggle(enabled: Bool) {
+        guard enabled else {
+            // Master toggle off — no further action. Existing samples in Health
+            // stay put; future writes are skipped; deletes still cascade so we
+            // don't orphan samples on entries we wrote earlier.
+            return
+        }
+        guard HealthService.isAvailable else {
+            healthSyncEnabled = false
+            return
+        }
+        Task {
+            let ok = await HealthService.requestAuthorization()
+            if !ok {
+                await MainActor.run {
+                    healthSyncEnabled = false
+                    showingHealthPermissionAlert = true
+                }
+            }
+        }
+    }
+
+    private func importWeightsFromHealth() {
+        guard !importingWeights else { return }
+        importingWeights = true
+        importSummary = nil
+        Task {
+            let external = await HealthService.readExternalWeightSamples()
+
+            // Dedupe against any existing WeightEntry with the same healthSampleID
+            // (covers re-runs of this import button).
+            let existingDescriptor = FetchDescriptor<WeightEntry>()
+            let existing = (try? context.fetch(existingDescriptor)) ?? []
+            let existingUUIDs = Set(existing.compactMap { $0.healthSampleID })
+
+            var imported = 0
+            for sample in external where !existingUUIDs.contains(sample.uuid) {
+                let entry = WeightEntry(
+                    weightLbs: sample.weightLbs,
+                    loggedAt: sample.date,
+                    healthSampleID: sample.uuid,
+                    importedFromHealth: true
+                )
+                context.insert(entry)
+                imported += 1
+            }
+
+            await MainActor.run {
+                importingWeights = false
+                if imported == 0 {
+                    importSummary = "Already up to date. No new entries from Health."
+                } else {
+                    Haptic.success()
+                    importSummary = "Imported \(imported) weight entr\(imported == 1 ? "y" : "ies") from Apple Health."
+                }
+            }
         }
     }
 
@@ -1267,6 +1382,7 @@ struct RelogSheet: View {
         )
         context.insert(entry)
         LibraryFoodUpsert.upsert(from: entry, in: context)
+        HealthSync.onFoodSaved(entry)
         dismiss()
     }
 }
@@ -1532,6 +1648,7 @@ struct EditEntrySheet: View {
         entry.magnesium = parseOptional(magnesiumStr)
 
         LibraryFoodUpsert.upsert(from: entry, in: context)
+        HealthSync.onFoodEdited(entry)
         dismiss()
     }
 

@@ -257,6 +257,7 @@ struct PhotoLogSheet: View {
                             }
                             context.insert(entry)
                             LibraryFoodUpsert.upsert(from: entry, in: context)
+                            HealthSync.onFoodSaved(entry)
                             dismiss()
                         }
 }

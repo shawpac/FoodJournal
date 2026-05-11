@@ -404,6 +404,7 @@ struct SearchSheet: View {
 
         context.insert(entry)
         LibraryFoodUpsert.upsert(from: entry, in: context)
+        HealthSync.onFoodSaved(entry)
 
         pendingUndoEntry = entry
         undoMessage = "Added \(food.name) to \(meal.capitalized)"
@@ -424,6 +425,7 @@ struct SearchSheet: View {
         Haptic.light()
         undoTask?.cancel()
         if let entry = pendingUndoEntry {
+            HealthSync.onFoodDeleting(entry)
             context.delete(entry)
         }
         pendingUndoEntry = nil

@@ -493,6 +493,7 @@ struct WeightEntriesSheet: View {
         dismissKeyboard()
         let entry = WeightEntry(weightLbs: value, loggedAt: dateInput)
         context.insert(entry)
+        HealthSync.onWeightSaved(entry)
         weightInput = ""
         dateInput = .now
     }
@@ -527,6 +528,7 @@ struct WeightEntriesSheet: View {
         undoTask?.cancel()
         for id in pendingDeleteIDs {
             if let entry = allWeights.first(where: { $0.persistentModelID == id }) {
+                HealthSync.onWeightDeleting(entry)
                 context.delete(entry)
             }
         }

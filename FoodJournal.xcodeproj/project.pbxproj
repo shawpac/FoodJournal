@@ -10,9 +10,22 @@
 		B8DF5BC82FA40BC00038580E /* FoodJournal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = FoodJournal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		B82337852FB18E1200B2EF33 /* Exceptions for "FoodJournal" folder in "FoodJournal" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = B8DF5BC72FA40BC00038580E /* FoodJournal */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		B8DF5BCA2FA40BC00038580E /* FoodJournal */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B82337852FB18E1200B2EF33 /* Exceptions for "FoodJournal" folder in "FoodJournal" target */,
+			);
 			path = FoodJournal;
 			sourceTree = "<group>";
 		};
@@ -251,13 +264,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FoodJournal/FoodJournal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5STXJ6HQZ6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FoodJournal/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = FoodJournal;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan food barcodes for nutrition lookup";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "FoodJournal imports your weight entries from Apple Health so you don't have to retype them.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "FoodJournal writes your logged food, water, and weight to Apple Health so they appear in your daily nutrition summaries.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -285,13 +302,17 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = FoodJournal/FoodJournal.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5STXJ6HQZ6;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = FoodJournal/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = FoodJournal;
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan food barcodes for nutrition lookup";
+				INFOPLIST_KEY_NSHealthShareUsageDescription = "FoodJournal imports your weight entries from Apple Health so you don't have to retype them.";
+				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "FoodJournal writes your logged food, water, and weight to Apple Health so they appear in your daily nutrition summaries.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

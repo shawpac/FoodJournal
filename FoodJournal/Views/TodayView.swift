@@ -436,7 +436,9 @@ struct TodayView: View {
     private func logWater(_ amountOz: Double) {
         guard amountOz != 0 else { return }
         Haptic.light()
-        context.insert(WaterEntry(amountOz: amountOz, loggedAt: timestampForSave()))
+        let entry = WaterEntry(amountOz: amountOz, loggedAt: timestampForSave())
+        context.insert(entry)
+        HealthSync.onWaterSaved(entry)
     }
 
     private func softDelete(_ entry: FoodEntry) {
@@ -468,6 +470,7 @@ struct TodayView: View {
     private func commitPendingDeletes() {
         for id in pendingDeleteIDs {
             if let entry = allEntries.first(where: { $0.persistentModelID == id }) {
+                HealthSync.onFoodDeleting(entry)
                 context.delete(entry)
             }
         }
@@ -480,7 +483,9 @@ struct TodayView: View {
         let diff = newTotal - waterOzForSelectedDay
         if diff != 0 {
             Haptic.light()
-            context.insert(WaterEntry(amountOz: diff, loggedAt: timestampForSave()))
+            let entry = WaterEntry(amountOz: diff, loggedAt: timestampForSave())
+            context.insert(entry)
+            HealthSync.onWaterSaved(entry)
         }
         dismissKeyboard()
     }
@@ -713,6 +718,7 @@ struct TodayView: View {
             undoTask?.cancel()
             for id in pendingDeleteIDs {
                 if let entry = allWater.first(where: { $0.persistentModelID == id }) {
+                    HealthSync.onWaterDeleting(entry)
                     context.delete(entry)
                 }
             }
