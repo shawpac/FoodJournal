@@ -237,6 +237,17 @@ struct TrendsView: View {
                         nutrientRow(label: "Fat", stat: averageRequired(\.fat), goal: goals?.fatGoal, unit: "g")
                     }
 
+                    Section {
+                        distributionRow("Breakfast", meal: "breakfast")
+                        distributionRow("Lunch",     meal: "lunch")
+                        distributionRow("Dinner",    meal: "dinner")
+                        distributionRow("Snacks",    meal: "snack")
+                    } header: {
+                        Text("Distribution by meal")
+                    } footer: {
+                        Text("Share of each macro across the range, by meal. Helps spot patterns like \"most of my carbs are at dinner.\"")
+                    }
+
                     Section("Water (daily average)") {
                         nutrientRow(label: "Water", stat: averageWater(), goal: goals?.waterGoalOz, unit: "oz", asInt: true)
                     }
@@ -314,6 +325,64 @@ struct TrendsView: View {
             return "\(Int(v.rounded()))"
         }
         return FoodFormat.value(v)
+    }
+
+    // MARK: - Distribution by meal
+
+    private struct MealDistribution {
+        let cal: Double  // 0…100
+        let p:   Double
+        let c:   Double
+        let f:   Double
+    }
+
+    private func mealDistribution(_ meal: String) -> MealDistribution {
+        let mealEntries = entriesInRange.filter { $0.mealType == meal }
+        let mealCal = mealEntries.reduce(0) { $0 + $1.calories * $1.servings }
+        let mealP   = mealEntries.reduce(0) { $0 + $1.protein  * $1.servings }
+        let mealC   = mealEntries.reduce(0) { $0 + $1.carbs    * $1.servings }
+        let mealF   = mealEntries.reduce(0) { $0 + $1.fat      * $1.servings }
+
+        let totalCal = entriesInRange.reduce(0) { $0 + $1.calories * $1.servings }
+        let totalP   = entriesInRange.reduce(0) { $0 + $1.protein  * $1.servings }
+        let totalC   = entriesInRange.reduce(0) { $0 + $1.carbs    * $1.servings }
+        let totalF   = entriesInRange.reduce(0) { $0 + $1.fat      * $1.servings }
+
+        func pct(_ part: Double, _ total: Double) -> Double {
+            guard total > 0 else { return 0 }
+            return (part / total) * 100
+        }
+        return MealDistribution(
+            cal: pct(mealCal, totalCal),
+            p:   pct(mealP,   totalP),
+            c:   pct(mealC,   totalC),
+            f:   pct(mealF,   totalF)
+        )
+    }
+
+    @ViewBuilder
+    private func distributionRow(_ label: String, meal: String) -> some View {
+        let d = mealDistribution(meal)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(label).font(.subheadline.weight(.semibold))
+            HStack(spacing: 14) {
+                pctChip("Cal", d.cal)
+                pctChip("P",   d.p)
+                pctChip("C",   d.c)
+                pctChip("F",   d.f)
+            }
+        }
+    }
+
+    private func pctChip(_ label: String, _ pct: Double) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("\(Int(pct.rounded()))%")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.primary)
+        }
     }
 
     // MARK: - Weight summary rows

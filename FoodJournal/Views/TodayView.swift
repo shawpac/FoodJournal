@@ -377,13 +377,13 @@ struct TodayView: View {
 
     private func mealSummaryCard(meal: String) -> some View {
         let entries = entriesForMeal(meal)
-        let cal = mealCalories(meal)
+        let mt = mealTotals(meal)
         let isEmpty = entries.isEmpty
 
         return Button {
             openMeal = meal
         } label: {
-            HStack {
+            HStack(alignment: .center) {
                 Text(mealLabel(meal))
                     .font(.headline)
                     .foregroundStyle(isEmpty ? .secondary : .primary)
@@ -393,9 +393,14 @@ struct TodayView: View {
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.tertiary)
                 } else {
-                    Text("\(Int(cal)) cal")
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("\(Int(mt.cal)) cal")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Text("P \(Int(mt.p))g · C \(Int(mt.c))g · F \(Int(mt.f))g")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                    }
                 }
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -421,6 +426,15 @@ struct TodayView: View {
 
     private func mealCalories(_ meal: String) -> Double {
         entriesForMeal(meal).reduce(0) { $0 + $1.calories * $1.servings }
+    }
+
+    private func mealTotals(_ meal: String) -> (cal: Double, p: Double, c: Double, f: Double) {
+        entriesForMeal(meal).reduce((0, 0, 0, 0)) { acc, e in
+            (acc.0 + e.calories * e.servings,
+             acc.1 + e.protein  * e.servings,
+             acc.2 + e.carbs    * e.servings,
+             acc.3 + e.fat      * e.servings)
+        }
     }
 
     private func mealLabel(_ meal: String) -> String {
