@@ -4,6 +4,7 @@ import SwiftData
 struct TrendsView: View {
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
+    @Query(sort: \WeightEntry.loggedAt, order: .reverse) private var allWeights: [WeightEntry]
     @Query private var goalsList: [UserGoals]
 
     enum RangePreset: String, CaseIterable, Identifiable {
@@ -53,12 +54,62 @@ struct TrendsView: View {
 
     private var waterInRange: [WaterEntry] {
         allWater.filter {
+            $0.pendingDeleteAt == nil &&
             $0.loggedAt >= dateRange.start &&
             $0.loggedAt <= dateRange.end
         }
     }
 
+    private var weightsInRange: [WeightEntry] {
+        allWeights.filter {
+            $0.pendingDeleteAt == nil &&
+            $0.loggedAt >= dateRange.start &&
+            $0.loggedAt <= dateRange.end
+        }
+    }
+
+    private var activeWeights: [WeightEntry] {
+        allWeights.filter { $0.pendingDeleteAt == nil }
+    }
+
+    private var latestWeight: WeightEntry? {
+        // allWeights is already sorted by loggedAt descending
+        activeWeights.first
+    }
+
+    private var weightStat: Stat {
+        let cal = Calendar.current
+        // One value per calendar day; if multiple entries on a day, use the most recent.
+        var byDay: [Date: (date: Date, value: Double)] = [:]
+        for w in weightsInRange {
+            let day = cal.startOfDay(for: w.loggedAt)
+            if let existing = byDay[day] {
+                if w.loggedAt > existing.date {
+                    byDay[day] = (w.loggedAt, w.weightLbs)
+                }
+            } else {
+                byDay[day] = (w.loggedAt, w.weightLbs)
+            }
+        }
+        let n = byDay.count
+        guard n > 0 else { return Stat(average: nil, daysWithData: 0, totalDays: totalDays) }
+        let sum = byDay.values.reduce(0) { $0 + $1.value }
+        return Stat(average: sum / Double(n), daysWithData: n, totalDays: totalDays)
+    }
+
+    /// Difference between the most recent weight in range and the earliest weight in range.
+    /// Returns nil if fewer than 2 entries in range.
+    private var weightDelta: Double? {
+        let sorted = weightsInRange.sorted { $0.loggedAt < $1.loggedAt }
+        guard sorted.count >= 2, let first = sorted.first, let last = sorted.last else { return nil }
+        return last.weightLbs - first.weightLbs
+    }
+
     private var hasAnyData: Bool {
+        !entriesInRange.isEmpty || !waterInRange.isEmpty || !weightsInRange.isEmpty
+    }
+
+    private var hasFoodOrWaterData: Bool {
         !entriesInRange.isEmpty || !waterInRange.isEmpty
     }
 
@@ -144,13 +195,30 @@ struct TrendsView: View {
                     }
                 }
 
-                if !hasAnyData {
+                // Weight section is always visible — it's its own entry point for
+                // logging, independent of food/water data.
+                Section("Weight") {
+                    weightSummaryRows
+                    NavigationLink {
+                        WeightEntriesSheet()
+                    } label: {
+                        HStack {
+                            Text("Manage entries")
+                            Spacer()
+                            Text("\(activeWeights.count) total")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if !hasFoodOrWaterData {
                     Section {
                         VStack(spacing: 8) {
                             Image(systemName: "chart.bar.xaxis")
                                 .font(.system(size: 36))
                                 .foregroundStyle(.tertiary)
-                            Text("No data in this range")
+                            Text("No food or water in this range")
                                 .font(.headline)
                             Text("Try expanding the range, or log some food first.")
                                 .font(.subheadline)
@@ -246,5 +314,227 @@ struct TrendsView: View {
             return "\(Int(v.rounded()))"
         }
         return FoodFormat.value(v)
+    }
+
+    // MARK: - Weight summary rows
+
+    @ViewBuilder
+    private var weightSummaryRows: some View {
+        HStack {
+            Text("Latest")
+            Spacer()
+            if let w = latestWeight {
+                Text(formatWeight(w.weightLbs))
+                    .font(.body.monospacedDigit())
+                Text("lbs").foregroundStyle(.secondary)
+                Text(w.loggedAt, style: .date)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            } else {
+                Text("–").foregroundStyle(.tertiary)
+            }
+        }
+
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Avg in range")
+                Spacer()
+                if let avg = weightStat.average {
+                    Text(formatWeight(avg))
+                        .font(.body.monospacedDigit())
+                    Text("lbs").foregroundStyle(.secondary)
+                } else {
+                    Text("–").foregroundStyle(.tertiary)
+                }
+            }
+            if weightStat.hasPartialCoverage, weightStat.daysWithData > 0 {
+                Text("based on \(weightStat.daysWithData) of \(weightStat.totalDays) day\(weightStat.totalDays == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+
+        if let delta = weightDelta {
+            HStack {
+                Text("Change in range")
+                Spacer()
+                Text(formatDelta(delta))
+                    .font(.body.monospacedDigit())
+                    .foregroundStyle(deltaColor(delta))
+                Text("lbs").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func formatWeight(_ v: Double) -> String {
+        String(format: "%.1f", v)
+    }
+
+    private func formatDelta(_ v: Double) -> String {
+        if v == 0 { return "±0.0" }
+        let sign = v > 0 ? "+" : "−"
+        return "\(sign)\(String(format: "%.1f", Swift.abs(v)))"
+    }
+
+    private func deltaColor(_ v: Double) -> Color {
+        if v == 0 { return .gray }
+        return v < 0 ? .green : .orange
+    }
+}
+
+// MARK: - WeightEntriesSheet
+
+struct WeightEntriesSheet: View {
+    @Environment(\.modelContext) private var context
+    @Query(sort: \WeightEntry.loggedAt, order: .reverse) private var allWeights: [WeightEntry]
+
+    @State private var weightInput: String = ""
+    @State private var dateInput: Date = .now
+
+    @State private var undoMessage: String?
+    @State private var pendingDeleteIDs: [PersistentIdentifier] = []
+    @State private var undoTask: Task<Void, Never>?
+
+    private var visibleWeights: [WeightEntry] {
+        allWeights.filter { $0.pendingDeleteAt == nil }
+    }
+
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            Form {
+                Section("Log weight") {
+                    HStack {
+                        TextField("Weight", text: $weightInput)
+                            .keyboardType(.decimalPad)
+                            .modifier(SelectAllOnFocus())
+                        Text("lbs")
+                            .foregroundStyle(.secondary)
+                    }
+                    DatePicker("When", selection: $dateInput, in: ...Date.now, displayedComponents: .date)
+                    Button {
+                        logWeight()
+                    } label: {
+                        Text("Save")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+                    .disabled(parsedWeight == nil)
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                }
+
+                Section("Entries") {
+                    if visibleWeights.isEmpty {
+                        HStack(spacing: 8) {
+                            Image(systemName: "scalemass")
+                                .foregroundStyle(.secondary)
+                            Text("No weight entries yet.")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        ForEach(visibleWeights) { entry in
+                            HStack {
+                                Image(systemName: "scalemass.fill")
+                                    .foregroundStyle(.orange)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("\(formatWeight(entry.weightLbs)) lbs")
+                                        .font(.body.monospacedDigit())
+                                    Text(entry.loggedAt, style: .date)
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button(role: .destructive) {
+                                    softDelete(entry)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let undoMessage {
+                HStack(spacing: 12) {
+                    Text(undoMessage)
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Button("Undo") { undoDelete() }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.yellow)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+                .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: undoMessage)
+        .navigationTitle("Weight")
+        .navigationBarTitleDisplayMode(.inline)
+        .onDisappear { commitPendingDeletes() }
+    }
+
+    private var parsedWeight: Double? {
+        let trimmed = weightInput.trimmingCharacters(in: .whitespaces)
+        guard let value = Double(trimmed), value > 0 else { return nil }
+        return value
+    }
+
+    private func logWeight() {
+        guard let value = parsedWeight else { return }
+        Haptic.light()
+        dismissKeyboard()
+        let entry = WeightEntry(weightLbs: value, loggedAt: dateInput)
+        context.insert(entry)
+        weightInput = ""
+        dateInput = .now
+    }
+
+    private func softDelete(_ entry: WeightEntry) {
+        Haptic.medium()
+        entry.pendingDeleteAt = .now
+        pendingDeleteIDs.append(entry.persistentModelID)
+        undoMessage = "Deleted \(formatWeight(entry.weightLbs)) lbs"
+
+        undoTask?.cancel()
+        undoTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if Task.isCancelled { return }
+            await MainActor.run { commitPendingDeletes() }
+        }
+    }
+
+    private func undoDelete() {
+        Haptic.light()
+        undoTask?.cancel()
+        for id in pendingDeleteIDs {
+            if let entry = allWeights.first(where: { $0.persistentModelID == id }) {
+                entry.pendingDeleteAt = nil
+            }
+        }
+        pendingDeleteIDs.removeAll()
+        undoMessage = nil
+    }
+
+    private func commitPendingDeletes() {
+        undoTask?.cancel()
+        for id in pendingDeleteIDs {
+            if let entry = allWeights.first(where: { $0.persistentModelID == id }) {
+                context.delete(entry)
+            }
+        }
+        pendingDeleteIDs.removeAll()
+        undoMessage = nil
+    }
+
+    private func formatWeight(_ v: Double) -> String {
+        String(format: "%.1f", v)
     }
 }

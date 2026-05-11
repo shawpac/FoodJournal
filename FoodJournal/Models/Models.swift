@@ -187,11 +187,28 @@ final class WaterEntry {
     var id: UUID
     var amountOz: Double
     var loggedAt: Date
+    var pendingDeleteAt: Date?       // soft-delete timestamp; commits after undo window expires
 
-    init(amountOz: Double, loggedAt: Date = .now) {
+    init(amountOz: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil) {
         self.id = UUID()
         self.amountOz = amountOz
         self.loggedAt = loggedAt
+        self.pendingDeleteAt = pendingDeleteAt
+    }
+}
+
+@Model
+final class WeightEntry {
+    var id: UUID
+    var weightLbs: Double
+    var loggedAt: Date
+    var pendingDeleteAt: Date?
+
+    init(weightLbs: Double, loggedAt: Date = .now, pendingDeleteAt: Date? = nil) {
+        self.id = UUID()
+        self.weightLbs = weightLbs
+        self.loggedAt = loggedAt
+        self.pendingDeleteAt = pendingDeleteAt
     }
 }
 @Model

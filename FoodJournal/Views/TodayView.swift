@@ -36,7 +36,10 @@ struct TodayView: View {
 
     private var waterOzForSelectedDay: Double {
         allWater
-            .filter { Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) }
+            .filter {
+                Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) &&
+                $0.pendingDeleteAt == nil
+            }
             .reduce(0) { $0 + $1.amountOz }
     }
 
@@ -553,8 +556,15 @@ struct TodayView: View {
         let selectedDate: Date
         @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
 
+        @State private var undoMessage: String?
+        @State private var pendingDeleteIDs: [PersistentIdentifier] = []
+        @State private var undoTask: Task<Void, Never>?
+
         private var entriesForDay: [WaterEntry] {
-            allWater.filter { Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) }
+            allWater.filter {
+                Calendar.current.isDate($0.loggedAt, inSameDayAs: selectedDate) &&
+                $0.pendingDeleteAt == nil
+            }
         }
 
         private var total: Double {
@@ -579,44 +589,71 @@ struct TodayView: View {
 
         var body: some View {
             NavigationStack {
-                List {
-                    Section {
-                        HStack {
-                            Text(totalLabel)
-                                .font(.headline)
-                            Spacer()
-                            Text("\(formatted(total)) oz")
-                                .font(.headline.monospacedDigit())
-                                .foregroundStyle(.cyan)
-                        }
-                    }
-
-                    Section("Entries") {
-                        if entriesForDay.isEmpty {
-                            HStack(spacing: 8) {
-                                Image(systemName: "drop")
-                                    .foregroundStyle(.cyan.opacity(0.6))
-                                Text("Nothing logged.")
-                                    .foregroundStyle(.secondary)
+                ZStack(alignment: .bottom) {
+                    List {
+                        Section {
+                            HStack {
+                                Text(totalLabel)
+                                    .font(.headline)
+                                Spacer()
+                                Text("\(formatted(total)) oz")
+                                    .font(.headline.monospacedDigit())
+                                    .foregroundStyle(.cyan)
                             }
-                        } else {
-                            ForEach(entriesForDay) { entry in
-                                HStack {
-                                    Image(systemName: entry.amountOz < 0 ? "minus.circle.fill" : "drop.fill")
-                                        .foregroundStyle(entry.amountOz < 0 ? .red : .cyan)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text("\(formatted(entry.amountOz)) oz")
-                                            .font(.body.monospacedDigit())
-                                        Text(entry.loggedAt, style: .time)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
+                        }
+
+                        Section("Entries") {
+                            if entriesForDay.isEmpty {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "drop")
+                                        .foregroundStyle(.cyan.opacity(0.6))
+                                    Text("Nothing logged.")
+                                        .foregroundStyle(.secondary)
+                                }
+                            } else {
+                                ForEach(entriesForDay) { entry in
+                                    HStack {
+                                        Image(systemName: entry.amountOz < 0 ? "minus.circle.fill" : "drop.fill")
+                                            .foregroundStyle(entry.amountOz < 0 ? .red : .cyan)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("\(formatted(entry.amountOz)) oz")
+                                                .font(.body.monospacedDigit())
+                                            Text(entry.loggedAt, style: .time)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    .swipeActions(edge: .trailing) {
+                                        Button(role: .destructive) {
+                                            softDelete(entry)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
                                     }
                                 }
                             }
-                            .onDelete(perform: delete)
                         }
                     }
+
+                    if let undoMessage {
+                        HStack(spacing: 12) {
+                            Text(undoMessage)
+                                .font(.subheadline)
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Button("Undo") { undoDelete() }
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.yellow)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 8)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
+                .animation(.easeInOut(duration: 0.2), value: undoMessage)
                 .navigationTitle(sheetTitle)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -624,14 +661,45 @@ struct TodayView: View {
                         Button("Done") { dismiss() }
                     }
                 }
+                .onDisappear { commitPendingDeletes() }
             }
         }
 
-        private func delete(at offsets: IndexSet) {
+        private func softDelete(_ entry: WaterEntry) {
             Haptic.medium()
-            for index in offsets {
-                context.delete(entriesForDay[index])
+            entry.pendingDeleteAt = .now
+            pendingDeleteIDs.append(entry.persistentModelID)
+            undoMessage = "Deleted \(formatted(entry.amountOz)) oz"
+
+            undoTask?.cancel()
+            undoTask = Task {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                if Task.isCancelled { return }
+                await MainActor.run { commitPendingDeletes() }
             }
+        }
+
+        private func undoDelete() {
+            Haptic.light()
+            undoTask?.cancel()
+            for id in pendingDeleteIDs {
+                if let entry = allWater.first(where: { $0.persistentModelID == id }) {
+                    entry.pendingDeleteAt = nil
+                }
+            }
+            pendingDeleteIDs.removeAll()
+            undoMessage = nil
+        }
+
+        private func commitPendingDeletes() {
+            undoTask?.cancel()
+            for id in pendingDeleteIDs {
+                if let entry = allWater.first(where: { $0.persistentModelID == id }) {
+                    context.delete(entry)
+                }
+            }
+            pendingDeleteIDs.removeAll()
+            undoMessage = nil
         }
 
         private func formatted(_ d: Double) -> String {

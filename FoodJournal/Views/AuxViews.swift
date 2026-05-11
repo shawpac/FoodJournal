@@ -549,6 +549,16 @@ struct SettingsView: View {
     @AppStorage("lateNightWarningStartHour") private var warningStartHour: Int = 20
     @AppStorage("lateNightWarningEndHour")   private var warningEndHour: Int = 6
 
+    // Meal-window config — boundary hours for each named meal. Anything outside
+    // these windows falls through to "snack". Defaults match the v1.7 hardcoded
+    // schedule. Each window can wrap midnight (start > end).
+    @AppStorage("mealBreakfastStart") private var breakfastStart: Int = 6
+    @AppStorage("mealBreakfastEnd")   private var breakfastEnd:   Int = 10
+    @AppStorage("mealLunchStart")     private var lunchStart:     Int = 12
+    @AppStorage("mealLunchEnd")       private var lunchEnd:       Int = 14
+    @AppStorage("mealDinnerStart")    private var dinnerStart:    Int = 17
+    @AppStorage("mealDinnerEnd")      private var dinnerEnd:      Int = 20
+
     var body: some View {
         NavigationStack {
             Form {
@@ -601,6 +611,22 @@ struct SettingsView: View {
                     } else {
                         Text("Late-night snack saves will not prompt a confirmation.")
                     }
+                }
+
+                Section {
+                    mealWindowRow(label: "Breakfast", start: $breakfastStart, end: $breakfastEnd)
+                    mealWindowRow(label: "Lunch",     start: $lunchStart,     end: $lunchEnd)
+                    mealWindowRow(label: "Dinner",    start: $dinnerStart,    end: $dinnerEnd)
+                    Button {
+                        resetMealSchedule()
+                    } label: {
+                        Text("Reset to defaults")
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Meal time schedule")
+                } footer: {
+                    Text("Hours outside these windows default to Snack. Each window can wrap midnight (e.g. Dinner 22:00–02:00). New entries logged without an explicit meal context use this schedule.")
                 }
 
                 Section("Data") {
@@ -713,6 +739,39 @@ struct SettingsView: View {
         case 13...23: return "\(hour - 12) PM"
         default:      return "\(hour):00"
         }
+    }
+
+    @ViewBuilder
+    private func mealWindowRow(label: String, start: Binding<Int>, end: Binding<Int>) -> some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Picker("", selection: start) {
+                ForEach(0..<24, id: \.self) { hour in
+                    Text(formatHour(hour)).tag(hour)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            Text("–").foregroundStyle(.secondary)
+            Picker("", selection: end) {
+                ForEach(0..<24, id: \.self) { hour in
+                    Text(formatHour(hour)).tag(hour)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+    }
+
+    private func resetMealSchedule() {
+        Haptic.light()
+        breakfastStart = MealTimeHelper.defaultBreakfastStart
+        breakfastEnd   = MealTimeHelper.defaultBreakfastEnd
+        lunchStart     = MealTimeHelper.defaultLunchStart
+        lunchEnd       = MealTimeHelper.defaultLunchEnd
+        dinnerStart    = MealTimeHelper.defaultDinnerStart
+        dinnerEnd      = MealTimeHelper.defaultDinnerEnd
     }
 
     private func reload() {

@@ -10,7 +10,8 @@ struct FoodJournalApp: App {
                     CachedFood.self,
                     WaterEntry.self,
                     CachedPhotoEstimate.self,
-                    LibraryFood.self
+                    LibraryFood.self,
+                    WeightEntry.self
                 ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {

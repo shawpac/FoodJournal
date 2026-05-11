@@ -3,8 +3,8 @@ import SwiftData
 import UIKit
 
 // MARK: - CSVExportSheet
-/// Settings → "Export data" → date range → bundle of food.csv + water.csv into share sheet.
-/// Excludes soft-deleted (pendingDeleteAt != nil) food entries.
+/// Settings → "Export data" → date range → bundle of food.csv + water.csv + weight.csv into share sheet.
+/// Excludes soft-deleted (pendingDeleteAt != nil) food, water, and weight entries.
 /// Nil optional nutrients render as empty cells, never zero — preserves the nil ≠ 0 invariant.
 struct CSVExportSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -50,7 +50,7 @@ struct CSVExportSheet: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } footer: {
-                    Text("Generates two CSV files (food entries and water entries) and opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
+                    Text("Generates three CSV files (food entries, water entries, weight entries) and opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
                 }
 
                 if let lastSummary {
@@ -122,14 +122,27 @@ struct CSVExportSheet: View {
 
             let waterDescriptor = FetchDescriptor<WaterEntry>(
                 predicate: #Predicate<WaterEntry> { entry in
-                    entry.loggedAt >= rangeStart && entry.loggedAt < rangeEnd
+                    entry.loggedAt >= rangeStart &&
+                    entry.loggedAt < rangeEnd &&
+                    entry.pendingDeleteAt == nil
                 },
                 sortBy: [SortDescriptor(\.loggedAt)]
             )
             let waters = try context.fetch(waterDescriptor)
 
+            let weightDescriptor = FetchDescriptor<WeightEntry>(
+                predicate: #Predicate<WeightEntry> { entry in
+                    entry.loggedAt >= rangeStart &&
+                    entry.loggedAt < rangeEnd &&
+                    entry.pendingDeleteAt == nil
+                },
+                sortBy: [SortDescriptor(\.loggedAt)]
+            )
+            let weights = try context.fetch(weightDescriptor)
+
             let foodCSV = buildFoodCSV(from: foods)
             let waterCSV = buildWaterCSV(from: waters)
+            let weightCSV = buildWeightCSV(from: weights)
 
             // Filename: FoodJournal-food-2026-04-03-to-2026-05-03.csv
             let dfFile = DateFormatter()
@@ -141,16 +154,19 @@ struct CSVExportSheet: View {
             let tmp = FileManager.default.temporaryDirectory
             let foodURL = tmp.appendingPathComponent("FoodJournal-food-\(startStr)-to-\(endStr).csv")
             let waterURL = tmp.appendingPathComponent("FoodJournal-water-\(startStr)-to-\(endStr).csv")
+            let weightURL = tmp.appendingPathComponent("FoodJournal-weight-\(startStr)-to-\(endStr).csv")
 
             // Overwrite if a previous export with the same range is still in tmp
             try? FileManager.default.removeItem(at: foodURL)
             try? FileManager.default.removeItem(at: waterURL)
+            try? FileManager.default.removeItem(at: weightURL)
 
             try foodCSV.write(to: foodURL, atomically: true, encoding: .utf8)
             try waterCSV.write(to: waterURL, atomically: true, encoding: .utf8)
+            try weightCSV.write(to: weightURL, atomically: true, encoding: .utf8)
 
-            shareItems = [foodURL, waterURL]
-            lastSummary = "Prepared \(foods.count) food + \(waters.count) water entries."
+            shareItems = [foodURL, waterURL, weightURL]
+            lastSummary = "Prepared \(foods.count) food + \(waters.count) water + \(weights.count) weight entries."
             isGenerating = false
             isShareSheetPresented = true
         } catch {
@@ -234,6 +250,26 @@ struct CSVExportSheet: View {
                 dateFmt.string(from: e.loggedAt),
                 timeFmt.string(from: e.loggedAt),
                 num(e.amountOz)
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func buildWeightCSV(from entries: [WeightEntry]) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        timeFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        var lines: [String] = ["date,time,weight_lbs"]
+        for e in entries {
+            let row = [
+                dateFmt.string(from: e.loggedAt),
+                timeFmt.string(from: e.loggedAt),
+                num(e.weightLbs)
             ].joined(separator: ",")
             lines.append(row)
         }

@@ -7,6 +7,12 @@ import Foundation
 /// Also gates the late-night snack confirmation alert. The window and on/off
 /// switch are user-configurable via Settings (stored in UserDefaults so no
 /// schema change is required).
+///
+/// v1.8: meal windows themselves are also user-configurable via Settings.
+/// Six UserDefaults keys hold breakfast/lunch/dinner start+end hours.
+/// Each window may wrap midnight (start > end). Order of precedence when
+/// windows overlap: breakfast, then lunch, then dinner. Anything not in a
+/// configured window falls through to "snack".
 enum MealTimeHelper {
 
     // MARK: - UserDefaults keys
@@ -15,12 +21,27 @@ enum MealTimeHelper {
         static let warningEnabled   = "lateNightWarningEnabled"
         static let warningStartHour = "lateNightWarningStartHour"
         static let warningEndHour   = "lateNightWarningEndHour"
+
+        static let breakfastStart   = "mealBreakfastStart"
+        static let breakfastEnd     = "mealBreakfastEnd"
+        static let lunchStart       = "mealLunchStart"
+        static let lunchEnd         = "mealLunchEnd"
+        static let dinnerStart      = "mealDinnerStart"
+        static let dinnerEnd        = "mealDinnerEnd"
     }
 
-    // Defaults are 8pm–6am, enabled. Used when keys haven't been set yet.
+    // Late-night warning defaults: 8pm–6am, enabled.
     static let defaultEnabled   = true
     static let defaultStartHour = 20
     static let defaultEndHour   = 6
+
+    // Meal-window defaults match the v1.7 hardcoded schedule.
+    static let defaultBreakfastStart = 6
+    static let defaultBreakfastEnd   = 10
+    static let defaultLunchStart     = 12
+    static let defaultLunchEnd       = 14
+    static let defaultDinnerStart    = 17
+    static let defaultDinnerEnd      = 20
 
     // MARK: - Computed config (reads UserDefaults, falls back to defaults)
 
@@ -34,51 +55,44 @@ enum MealTimeHelper {
     }
 
     static var warningStartHour: Int {
-        if UserDefaults.standard.object(forKey: Keys.warningStartHour) == nil {
-            return defaultStartHour
-        }
-        return UserDefaults.standard.integer(forKey: Keys.warningStartHour)
+        readHour(Keys.warningStartHour, fallback: defaultStartHour)
     }
 
     static var warningEndHour: Int {
-        if UserDefaults.standard.object(forKey: Keys.warningEndHour) == nil {
-            return defaultEndHour
+        readHour(Keys.warningEndHour, fallback: defaultEndHour)
+    }
+
+    static var breakfastStart: Int { readHour(Keys.breakfastStart, fallback: defaultBreakfastStart) }
+    static var breakfastEnd:   Int { readHour(Keys.breakfastEnd,   fallback: defaultBreakfastEnd) }
+    static var lunchStart:     Int { readHour(Keys.lunchStart,     fallback: defaultLunchStart) }
+    static var lunchEnd:       Int { readHour(Keys.lunchEnd,       fallback: defaultLunchEnd) }
+    static var dinnerStart:    Int { readHour(Keys.dinnerStart,    fallback: defaultDinnerStart) }
+    static var dinnerEnd:      Int { readHour(Keys.dinnerEnd,      fallback: defaultDinnerEnd) }
+
+    private static func readHour(_ key: String, fallback: Int) -> Int {
+        if UserDefaults.standard.object(forKey: key) == nil {
+            return fallback
         }
-        return UserDefaults.standard.integer(forKey: Keys.warningEndHour)
+        return UserDefaults.standard.integer(forKey: key)
     }
 
     // MARK: - Public API (call sites unchanged)
 
-    /// Best-guess meal type for the given Date. Time-of-day → meal mapping is fixed.
+    /// Best-guess meal type for the given Date. Reads the user-configured
+    /// breakfast/lunch/dinner windows from UserDefaults; falls back to snack.
+    /// Precedence on overlap: breakfast > lunch > dinner > snack.
     static func mealType(at date: Date = .now) -> String {
         let hour = Calendar.current.component(.hour, from: date)
-        switch hour {
-        case 6..<10:   return "breakfast"
-        case 10..<12:  return "snack"
-        case 12..<14:  return "lunch"
-        case 14..<17:  return "snack"
-        case 17..<20:  return "dinner"
-        default:       return "snack"
-        }
+        if hourInWindow(hour, start: breakfastStart, end: breakfastEnd) { return "breakfast" }
+        if hourInWindow(hour, start: lunchStart,     end: lunchEnd)     { return "lunch" }
+        if hourInWindow(hour, start: dinnerStart,    end: dinnerEnd)    { return "dinner" }
+        return "snack"
     }
 
     /// True when the current hour is inside the user-configured late-night window.
-    /// Handles wraparound: a 20:00 → 06:00 window means hour ≥ 20 OR hour < 6.
-    /// A non-wrapping window like 22:00 → 23:00 means 22 ≤ hour < 23.
     static func isLateNight(at date: Date = .now) -> Bool {
         let hour = Calendar.current.component(.hour, from: date)
-        let start = warningStartHour
-        let end = warningEndHour
-        if start == end {
-            // Degenerate: zero-width window. Treat as never late.
-            return false
-        }
-        if start < end {
-            return hour >= start && hour < end
-        } else {
-            // Wraparound case (the default 20→6 falls here).
-            return hour >= start || hour < end
-        }
+        return hourInWindow(hour, start: warningStartHour, end: warningEndHour)
     }
 
     /// Returns true ONLY when: warning is enabled, meal is "snack",
@@ -86,5 +100,19 @@ enum MealTimeHelper {
     static func shouldWarnAboutLateSnack(meal: String, at date: Date = .now) -> Bool {
         guard warningEnabled else { return false }
         return meal == "snack" && isLateNight(at: date)
+    }
+
+    // MARK: - Helpers
+
+    /// Returns true when `hour` falls inside a [start, end) window.
+    /// - start == end → zero-width window, never matches.
+    /// - start < end → ordinary same-day window.
+    /// - start > end → wraps midnight (e.g. 20→6 means hour ≥ 20 OR hour < 6).
+    private static func hourInWindow(_ hour: Int, start: Int, end: Int) -> Bool {
+        if start == end { return false }
+        if start < end {
+            return hour >= start && hour < end
+        }
+        return hour >= start || hour < end
     }
 }
