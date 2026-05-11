@@ -615,6 +615,11 @@ struct SettingsView: View {
     @AppStorage("notifyDinnerHour")       private var notifyDinnerHour: Int = 18
     @AppStorage("notifyDinnerMinute")     private var notifyDinnerMinute: Int = 30
 
+    // "Your usual?" suggestion banner on Today during meal windows. Mirrors
+    // UsualSuggestionService.lookbackDays / minOccurrences for the user-facing
+    // description. Defaults to on — non-intrusive, opt-out via this toggle.
+    @AppStorage("usualSuggestionsEnabled") private var usualSuggestionsEnabled: Bool = true
+
     @State private var showingPermissionAlert = false
 
     // Apple Health sync — master toggle. Disabled by default. First toggle ON
@@ -723,6 +728,14 @@ struct SettingsView: View {
                     Text("Reminders")
                 } footer: {
                     Text("Daily notifications nudging you to log each meal. Tap a notification to jump straight to that meal. Off by default.")
+                }
+
+                Section {
+                    Toggle("Suggest \"your usual\"", isOn: $usualSuggestionsEnabled)
+                } header: {
+                    Text("Smart suggestions")
+                } footer: {
+                    Text("Surfaces a banner on Today during a meal's time window when you've logged the same food for that meal at least 3 times in the past 14 days. Tap to one-tap log with a 5-second undo.")
                 }
 
                 Section {

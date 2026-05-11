@@ -26,6 +26,17 @@ struct TodayView: View {
     @State private var undoTask: Task<Void, Never>?
     @State private var openMeal: String?
 
+    /// Per-meal in-memory dismissal for the "your usual?" banner. Resets when
+    /// the view re-mounts (e.g. tomorrow's app open) — intentional. Keeping
+    /// this transient avoids polluting UserDefaults with per-day keys.
+    @State private var dismissedSuggestionMeals: Set<String> = []
+    /// Entry just inserted via the suggestion banner. While non-nil the undo
+    /// toast offers to remove it; commits to nothing after 5s (the entry is
+    /// already in the context).
+    @State private var pendingSuggestionEntry: FoodEntry?
+
+    @AppStorage("usualSuggestionsEnabled") private var usualSuggestionsEnabled: Bool = true
+
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query private var goalsList: [UserGoals]
     @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
@@ -109,6 +120,9 @@ struct TodayView: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     VStack(spacing: 16) {
+                        if let suggestion = currentSuggestion {
+                            suggestionBanner(suggestion)
+                        }
                         dailyTotalsCard
                         waterCard
                         ForEach(mealOrder, id: \.self) { meal in
@@ -125,7 +139,13 @@ struct TodayView: View {
                             .font(.subheadline)
                             .foregroundStyle(.white)
                         Spacer()
-                        Button("Undo") { undoDelete() }
+                        Button("Undo") {
+                            if pendingSuggestionEntry != nil {
+                                undoSuggestionAdd()
+                            } else {
+                                undoDelete()
+                            }
+                        }
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.yellow)
                     }
@@ -492,6 +512,128 @@ struct TodayView: View {
         undoMessage = nil
     }
 
+    // MARK: - "Your usual" suggestion
+
+    /// Returns a suggestion to surface right now, or nil. Cheap to recompute
+    /// per render because the DB fetch is small and the body only re-renders
+    /// when @Query data changes.
+    private var currentSuggestion: UsualSuggestionService.Suggestion? {
+        guard usualSuggestionsEnabled,
+              isToday,
+              let meal = UsualSuggestionService.activeMeal(),
+              !dismissedSuggestionMeals.contains(meal),
+              !mealHasEntriesToday(meal)
+        else { return nil }
+        return UsualSuggestionService.suggest(for: meal, in: context)
+    }
+
+    private func mealHasEntriesToday(_ meal: String) -> Bool {
+        entriesForSelectedDay.contains { $0.mealType == meal }
+    }
+
+    @ViewBuilder
+    private func suggestionBanner(_ s: UsualSuggestionService.Suggestion) -> some View {
+        let t = s.template
+        Button {
+            logSuggestion(s)
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your usual \(s.meal)?")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text("\(t.name) · \(Int(t.calories * t.servings)) cal")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Button {
+                    dismissedSuggestionMeals.insert(s.meal)
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(8)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func logSuggestion(_ s: UsualSuggestionService.Suggestion) {
+        let t = s.template
+        let entry = FoodEntry(
+            name: t.name,
+            brand: t.brand,
+            servings: t.servings,
+            servingUnit: t.servingUnit,
+            calories: t.calories,
+            protein: t.protein,
+            carbs: t.carbs,
+            fat: t.fat,
+            saturatedFat: t.saturatedFat,
+            polyunsaturatedFat: t.polyunsaturatedFat,
+            monounsaturatedFat: t.monounsaturatedFat,
+            transFat: t.transFat,
+            fiber: t.fiber,
+            sugar: t.sugar,
+            cholesterol: t.cholesterol,
+            sodium: t.sodium,
+            potassium: t.potassium,
+            vitaminA: t.vitaminA,
+            vitaminC: t.vitaminC,
+            vitaminD: t.vitaminD,
+            calcium: t.calcium,
+            iron: t.iron,
+            magnesium: t.magnesium,
+            mealType: s.meal,
+            source: "suggestion",
+            barcode: t.barcode
+        )
+        Haptic.success()
+        context.insert(entry)
+        LibraryFoodUpsert.upsert(from: entry, in: context)
+        HealthSync.onFoodSaved(entry)
+
+        pendingSuggestionEntry = entry
+        undoMessage = "Logged \(t.name)"
+
+        undoTask?.cancel()
+        undoTask = Task {
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            if Task.isCancelled { return }
+            await MainActor.run { commitSuggestionAdd() }
+        }
+    }
+
+    private func undoSuggestionAdd() {
+        Haptic.light()
+        undoTask?.cancel()
+        if let entry = pendingSuggestionEntry {
+            HealthSync.onFoodDeleting(entry)
+            context.delete(entry)
+        }
+        pendingSuggestionEntry = nil
+        undoMessage = nil
+    }
+
+    private func commitSuggestionAdd() {
+        // The entry is already in the context — committing just clears the
+        // pending-undo state so the toast disappears.
+        pendingSuggestionEntry = nil
+        undoMessage = nil
+    }
+
     private func applyTotalEdit() {
         guard let newTotal = Double(totalEditText.trimmingCharacters(in: .whitespaces)) else { return }
         let diff = newTotal - waterOzForSelectedDay
@@ -573,10 +715,11 @@ struct TodayView: View {
 
         private var iconForSource: String {
             switch entry.source {
-            case "barcode": return "barcode.viewfinder"
-            case "photo":   return "camera.fill"
-            case "search":  return "magnifyingglass"
-            default:        return "square.and.pencil"
+            case "barcode":    return "barcode.viewfinder"
+            case "photo":      return "camera.fill"
+            case "search":     return "magnifyingglass"
+            case "suggestion": return "sparkles"
+            default:           return "square.and.pencil"
             }
         }
 
