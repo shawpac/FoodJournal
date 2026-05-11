@@ -1,177 +1,127 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.7.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v1.8.6. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
 
-### v1.7.1 — Date-navigable Today tab + past-day logging
+### v1.8.6 — Smart "your usual?" suggestions
 
-**The "I forgot to log yesterday" problem, solved.**
+**The "logging the same breakfast every day is N taps too many" friction, gone.**
 
-**Today tab is now date-navigable:**
-- ✅ Chevron buttons (`‹` / `›`) in the toolbar step the view backward and forward by day. Forward chevron is disabled when on today.
-- ✅ Tap the title (which shows "Today" / "Yesterday" / formatted date like "Mon, May 4") → opens a date-picker sheet with a graphical calendar.
-- ✅ Future dates are visually disabled in the picker.
-- ✅ "Today" button in the picker's nav bar for instant jump-back.
-- ✅ All cards (daily totals, water, meal cards, Full breakdown) reflect the selected day's data.
+- ✅ New `UsualSuggestionService` — heuristic: most-frequently-logged food for a meal slot over the last 14 days, threshold ≥ 3 occurrences. Snacks excluded (too unpredictable).
+- ✅ Orange banner on Today above the daily-totals card. Surfaces only during a meal's configured window (breakfast/lunch/dinner) + 1h grace past the end.
+- ✅ Tap = one-tap log with 5-second undo. Mirrors template entry's nutrients + servings + unit. Source field set to `"suggestion"` (sparkles icon on meal cards).
+- ✅ X dismisses for the rest of today (in-memory). Logging anything else in that meal also hides it (the trigger gate flips).
+- ✅ Settings → Smart suggestions toggle. Defaults ON.
+- ✅ No schema change. Effect grows with usage history.
 
-**Past-day logging:**
-- ✅ Water card's "Log" button creates a WaterEntry on the selected day. Custom-amount entry, set-total alert, and individual entry deletion in WaterEntriesSheet all respect the selected day. Entries on past days are timestamped at noon of that day; today entries use real-time.
-- ✅ Meal cards' "+ Add to {meal}" buttons thread the selected date through Search / Barcode / Photo / Manual entry → entries land on the right day.
-- ✅ WaterEntriesSheet titled appropriately ("Today's water" / "Yesterday's water" / formatted date).
-- ✅ EditEntrySheet preserves an entry's `loggedAt` date — editing yesterday's entry doesn't move it to today.
+### v1.8.5 — Better photo logging: multi-photo + low-confidence retry
 
-**Architecture:**
-- ✅ Threaded `defaultDate: Date?` parameter alongside the existing `defaultMeal: String?` through ConfirmFoodView, ManualEntrySheet, BarcodeScannerSheet, SearchSheet, PhotoLogSheet. All five default to `nil` for backward compatibility — `nil` falls through to `.now`, so the Add tab keeps logging to today as before.
-- ✅ Used mutation pattern (`entry.loggedAt = defaultDate`) for FoodEntry saves to avoid coupling to init parameter order.
-- ✅ MealDetailSheet now accepts `selectedDate: Date` and threads it to all four input sheets.
-- ✅ Pure UI/wiring change — no schema modification, no app reinstall required.
+**Sometimes one angle isn't enough; sometimes Claude is unsure.**
 
-**Intentional scope decisions:**
-- The Add tab (global) always logs to today, regardless of Today's selectedDate. The Add tab is "log something now"; past-day logging routes through Today's meal cards.
-- EditEntrySheet does not get a date picker. Moving an entry to a different day is rare enough to handle via delete + re-log.
-- Past-day entries are timestamped at noon of that day. Hour-of-day doesn't matter for display (meal grouping is by `mealType` field) so this is a clean default.
+- ✅ `ClaudeVisionService.estimate(images:apiKey:)` sends N image blocks in a single API call (max 3 in UI). Single-photo wrapper kept for back-compat.
+- ✅ `prepareImages(_:)` computes a stable, order-independent combined cache hash. Single-photo case unchanged so existing cache entries still hit.
+- ✅ Updated multi-photo prompt tells Claude the photos show the SAME meal from different angles, refining one estimate.
+- ✅ PhotoLogSheet restructured around `images: [UIImage]` (max 3). Horizontal thumbnail strip + X overlay per thumb + inline "+ Add angle" tile.
+- ✅ Low-confidence card surfaces above EstimateCard when Claude returns `"low"`. Two actions: Add angle (re-opens camera), Re-analyze (cache-bypassing API call; upserts the existing cache row).
+- ✅ No schema change.
 
-### v1.7 — Trends, Most Used undo, totals-mode entry, configurable late-night alert
+### v1.8.4 — Macros breakdown by meal
 
-**Trends tab:**
-- ✅ New 4th tab (Today → Add → Trends → Settings) with line-chart icon.
-- ✅ Range selector: 7 days / 30 days / Custom (with date pickers, future-date prevention).
-- ✅ Daily averages for all 19 nutrients + water + calories, organized into the same five sections as the breakdown sheet.
-- ✅ Progress bars for the 5 main goals; numeric averages only for the rest.
-- ✅ "Based on N of M days" caption when coverage is partial — preserves nil ≠ 0 honesty.
-- ✅ Empty state with chart icon when no data is in range.
-- ✅ Pure read-only aggregation, no schema change.
+**Answer the "I keep eating 80% of my carbs at dinner" question.**
 
-**Most Used undo:**
-- ✅ Swipe-left "Remove" greys the row to 35% opacity and shows a 5-second undo toast.
-- ✅ Greyed rows are non-tappable during the window.
-- ✅ Dismissing the sheet commits any pending deletes immediately.
-- ✅ No schema change: undo lives entirely in transient view state.
+- ✅ Today meal cards show a second line below the calorie count: `P 18g · C 42g · F 12g`. Empty cards stay clean.
+- ✅ TrendsView gains "Distribution by meal" section between Macros and Water. Four rows (Breakfast / Lunch / Dinner / Snacks) each with four chips: `Cal X% · P X% · C X% · F X%`.
+- ✅ No schema change. Hidden alongside the Macros section when the range is empty.
 
-**Manual entry per-serving / totals mode:**
-- ✅ Segmented picker at the top of the Serving section: "Per serving" / "Total amount" (default Per serving).
-- ✅ In totals mode, "Servings" label flips to "Amount," macros section header flips to "Macros (totals)."
-- ✅ On save, totals-mode values are divided by the amount to derive per-serving — storage layer unchanged.
-- ✅ Resolves the 100×380=38,000 cal wart for new entries.
-- ✅ EditEntrySheet intentionally does NOT get the toggle.
+### v1.8.3 — Editable time-of-day on past-day entries
 
-**Late-night warning customization:**
-- ✅ "Late-night snack alert" section in Settings: toggle + Start/End hour pickers.
-- ✅ Defaults match v1.6 hardcoded behavior (8pm–6am, enabled).
-- ✅ Window math handles wrap-around and same-day windows.
-- ✅ Persisted via `@AppStorage` — no schema change.
+**Resolves the "every past-day entry shows 12:00 PM" cosmetic gap.**
+
+- ✅ ConfirmFoodView / ManualEntrySheet / PhotoLogSheet each show a "Time logged" picker only when logging to a past day. Initialized to noon (legacy default).
+- ✅ EditEntrySheet's "When" section gains a Time picker alongside the existing Date picker — both bind to `loggedAt` with different displayedComponents so each only edits its own field.
+- ✅ SearchSheet quick-add intentionally skipped to preserve the one-gesture promise.
+- ✅ WaterEntriesSheet skipped — water totals don't depend on time-of-day.
+
+### v1.8.2 — Apple Health two-way sync
+
+**Calorie totals, macros, water, and weight mirrored to the Health app. Weight imports both ways.**
+
+- ✅ Schema change: `healthSampleID` on FoodEntry/WaterEntry/WeightEntry, `importedFromHealth` on WeightEntry.
+- ✅ HealthKit capability + privacy strings (NSHealthShareUsageDescription / NSHealthUpdateUsageDescription).
+- ✅ New `HealthService`: per-type auth, write/delete/read primitives. Food saved as individual quantity samples (NOT HKCorrelation — correlation types can't be authorized, which makes them undeletable). Critical lesson baked into the service file's header comments.
+- ✅ New `HealthSync`: orchestration above HealthService. Writes gated by master toggle; deletes always attempt when entry has `healthSampleID`. EditEntrySheet path: delete old + write new.
+- ✅ Wired into every save path (Confirm / Manual / Photo / SearchSheet quick-add / RelogSheet / EditEntrySheet / water log / weight log).
+- ✅ Wired into every commit-delete path (TodayView food, WaterEntriesSheet, WeightEntriesSheet).
+- ✅ Settings → Apple Health → master toggle + "Import weight from Apple Health" button (dedupes by healthSampleID).
+- ✅ CSV export adds a third file: weight.csv.
+- ✅ Weight delete-sync skips entries with `importedFromHealth = true` so in-app deletes don't remove the user's smart-scale source data.
+
+### v1.8.1 — Daily meal reminders (local notifications)
+
+**Off-app nudge to log each meal at the configured time.**
+
+- ✅ New `NotificationService`: schedule / cancel / authorizationStatus. Daily-repeating `UNCalendarNotificationTrigger`. Stable identifier per meal so toggle ON/OFF + time changes replace cleanly.
+- ✅ New `@MainActor @Observable NotificationCoordinator`: UN delegate. Foreground notifications still show a banner (default iOS behavior swallows them). Tap → `pendingMealOpen = mealType`.
+- ✅ FoodJournalApp owns the coordinator, registers as the UN delegate, injects via `.environment`.
+- ✅ RootView watches `pendingMealOpen`, switches to Today tab, resets selectedDate, threads `pendingMealKey` into TodayView. TodayView opens that meal's MealDetailSheet.
+- ✅ Settings → Reminders: toggle + time picker per meal (Breakfast / Lunch / Dinner). All defaults off.
+- ✅ Permission flow: first toggle ON triggers the iOS prompt; denial reverts the toggle and surfaces an alert with Open Settings deep link.
+
+### v1.8 — Water undo + weight tracking + custom meal-time schedules
+
+**The v1.8 schema-change bundle: three Tier-1 items, one reinstall.**
+
+- ✅ `WaterEntry.pendingDeleteAt: Date?` schema field. WaterEntriesSheet swipe-delete now soft-deletes with 5-second undo toast.
+- ✅ New `WeightEntry` `@Model` (weightLbs, loggedAt, pendingDeleteAt). Registered in SwiftData container.
+- ✅ Trends gains a Weight section (always visible — independent of food/water data): Latest / Avg in range / Change in range (green ↓ / orange ↑). NavigationLink → `WeightEntriesSheet` for logging + managing entries with swipe-delete + 5-second undo.
+- ✅ `MealTimeHelper` reads breakfast/lunch/dinner start+end hours from UserDefaults. Refactored `mealType()` to use configured windows with breakfast > lunch > dinner precedence; falls through to "snack." `isLateNight()` shares the same `hourInWindow` helper, correctly handles wrap-around for any window.
+- ✅ Settings → Meal time schedule: 3 picker rows + "Reset to defaults."
+- ✅ Schema change → reinstall required (CSV export first).
+
+### v1.7.4 — Edit entry date picker
+- ✅ EditEntrySheet "When" section with `DatePicker(displayedComponents: .date)` to fix any misdated entry. Time component preserved automatically.
+
+### v1.7.3 — SearchSheet library swipe-add
+- ✅ Leading-edge swipe on library rows → green Quick add. One-gesture log, 5-second undo.
+
+### v1.7.2 — Add tab inherits Today's selectedDate
+- ✅ `selectedDate` hoisted to RootView, `@Binding` to both Today and Add. Past-day banner with Today reset button. Dynamic nav title. Bug fix bundled: ConfirmFoodView's missing defaultDate mutation.
+
+### v1.7.1 — Date-navigable Today + past-day logging
+- ✅ Toolbar chevrons + tap-the-title date picker. All cards reflect selectedDate. defaultDate threaded through all add flows. MealDetailSheet + NutritionBreakdownSheet accept selectedDate.
+
+### v1.7 — Trends + Most Used undo + totals-mode entry + configurable late-night
+- ✅ Trends 4th tab with range selector + daily averages + "based on N of M days" caption.
+- ✅ Most Used swipe-remove with undo.
+- ✅ Manual entry per-serving / totals-mode segmented picker.
+- ✅ Late-night warning toggle + time pickers.
 
 ### v1.6 — Today redesign + meal context everywhere
+- ✅ Always-visible meal cards + MealDetailSheet. Most Used replaces Recents. defaultMeal threaded everywhere. Time-derived meal defaults + late-night confirmation.
 
-**Today tab redesign:**
-- ✅ Daily totals card with four equally-sized horizontal stat tiles.
-- ✅ Always-visible meal cards with ghosted empty state.
-- ✅ Tap any meal card → MealDetailSheet with per-meal totals, swipe-delete with undo, and a four-button "+ Add to {meal}" section.
-- ✅ Picking a food from a meal card pre-tags the meal context.
+### v1.5 — Search + library + cleaner Settings + identity
+- ✅ LibraryFood model + passive upsert. LibraryService + USDAService. Unified SearchSheet. CSV export. Reset library button. Custom app icon.
 
-**Most Used replaces Recents on Add tab:**
-- ✅ Single "Most Used" card with purple star icon → opens MostUsedSheet listing top 10 library foods.
-- ✅ Sorted by hybrid score (`useCount + recency * 5`) — same algorithm as Search.
-
-**Pre-tagged meal context plumbing:**
-- ✅ `defaultMeal: String?` parameter threaded through ConfirmFoodView, ManualEntrySheet, RelogSheet, SearchSheet, BarcodeScannerSheet, PhotoLogSheet.
-
-**Time-derived meal defaults + late-night confirmation:**
-- ✅ `MealTimeHelper` enum classifies the current hour into breakfast/lunch/dinner/snack.
-- ✅ Saving a snack between 8pm–6am triggers an alert (configurable in v1.7).
-
-### v1.5 — search + library + cleaner Settings + identity
-
-- ✅ `LibraryFood` SwiftData model + passive upsert from every save path.
-- ✅ Hybrid storage (per-100g vs per-serving via `isPer100g` flag).
-- ✅ `LibraryService.search()` and `USDAService.search()` — local + USDA debounced.
-- ✅ Unified `SearchSheet`.
-- ✅ CSV export with date range picker, dual-CSV via share sheet.
-- ✅ Reset food library destructive button.
-- ✅ API keys section condensed to compact rows + focused edit sheets.
-- ✅ Custom devil-fruit-themed app icon (Gemini-generated).
-
-### v1.4 — quick wins + cost-down on photo logging
-- ✅ Switched to Claude Sonnet 4.6 (~5x cheaper per call).
-- ✅ Confirmation step before sending photo (Analyze button).
-- ✅ Image-hash caching.
-- ✅ Camera-based photo capture replaces photo library picker.
-- ✅ Number rounding, friendlier empty states, haptic feedback, editable goals for all 14 secondary nutrients, 5-second undo on swipe-delete.
+### v1.4 — Cost-down on photo logging
+- ✅ Sonnet (not Opus), confirmation step, image-hash cache, camera-based capture, swipe-delete with undo.
 
 ### v1.3
-- ✅ "Calories" instead of "kcal", click-to-edit any logged entry, serving unit dropdown with Custom… option, better Recents (relative timestamps + swipe-left), meal grouping on Today, select-all-on-focus on numeric fields.
+- ✅ "Calories" instead of "kcal," click-to-edit logged entries, serving unit dropdown, better Recents, meal grouping on Today, select-all-on-focus.
 
 ---
 
-## Tier 1 — The v1.8 schema-change bundle
+## What's left
 
-These three items all require a SwiftData schema change. Bundling them into a single session means **one app reinstall covers all three**, instead of a separate reinstall for each. Always export CSV first via Settings → Data → Export.
+### Tier 2 — deferred until publish decision
 
-### Water entry undo
-v1.4 added undo for food entries; v1.7 added it for Most Used. The remaining gap is water — swipe-deleting a water entry in WaterEntriesSheet still commits immediately.
+**iCloud / CloudKit sync across devices**
 
-⚠️ **Schema change required:** `WaterEntry` doesn't have `pendingDeleteAt` yet. Adding it follows the same pattern that `FoodEntry` already uses.
-
-~15 min of work once the schema reset is in motion.
-
-### Weight tracking
-Simple weight log tab (or a section in an existing tab). Pairs naturally with the Trends view — averaging weight over time is exactly the kind of thing Trends is good at.
-
-⚠️ **Schema change required:** new `WeightEntry` `@Model` with `loggedAt: Date`, `weightLbs: Double` (or `weightKg`, depending on user preference — could just expose both display modes via Settings later).
-
-Adding a 5th tab might crowd the bar; an alternative is integrating weight into the Trends tab as a top-level section. Decide during the session.
-
-~30–45 min.
-
-### Custom meal-time schedules
-The current `MealTimeHelper` hardcodes a 9-to-5-ish schedule. Make the windows user-editable in Settings — useful for shift workers, intermittent fasters, or anyone whose schedule doesn't match the default.
-
-⚠️ **Schema change required** if persisted as a `@Model` class. Alternative: persist via @AppStorage (similar to the v1.7 late-night config) — six integers for the boundary hours. The @AppStorage route would actually avoid the schema change. Decide during the session.
-
-~30 min.
-
-**Total for the bundle:** ~1–2 hours including reinstall and verification.
-
----
-
-## Tier 2 — Useful but not urgent (no schema change)
-
-### Past-day entry timestamps
-v1.7.1 timestamps past-day entries at noon. WaterEntriesSheet shows them all as "12:00 PM" which is technically misleading. Could add a time picker in WaterEntriesSheet's add flow, or a mini time picker on the meal-card "+ Add" buttons when on a past day. Low priority since totals/display are unaffected.
-
-### Date editing in EditEntrySheet
-v1.7.1 doesn't let you change an entry's `loggedAt` after the fact. To move an entry to a different day, you delete and re-log. Adding a `loggedAt` picker to EditEntrySheet would be straightforward — `DatePicker(in: ...Date.now)` next to the meal picker. ~10 min.
-
-### Smart auto-fill defaults
-If you eat the same breakfast every weekday, the app should know that. After 2 weeks of data, suggest "Log your usual?" Now that v1.7 has Trends, v1.6 has Most Used + library, and v1.7.1 makes past-day data easily browsable, the foundation is solid — basic version is "what did the user log between 7-10am yesterday."
-
-Could surface as a banner at the top of Today during meal windows ("Your usual breakfast?") or as a smart row at the top of Most Used.
-
-### Notification reminders
-Optional reminder to log dinner at 8pm if you haven't logged anything in 4 hours. Apple's `UserNotifications` framework. Get this wrong and it's annoying — get it right and you actually use the app daily.
-
-The v1.7 late-night warning is essentially a notification-equivalent inside the app. A real local notification would extend the same nudge to outside the app.
-
-### Apple Health integration
-Two-way sync with Apple Health — Health gets your calorie/macro/water totals, you get weight and exercise from Health. Lots of edge cases (units, deduplication, write conflicts) but unlocks the "real" iOS experience. ~2–3 hours, deserves its own focused session.
-
-If weight tracking lands in v1.8 first, this becomes a natural follow-up — Health writes weight, app reads it, no manual entry.
-
-### Better photo logging
-- Re-prompt Claude with "are you sure?" if confidence is low.
-- Multi-photo support — sometimes one angle isn't enough.
-- (Cache history with thumbnails is explicitly off the roadmap — Mike doesn't want photos ballooning the DB.)
-
-### Macros breakdown by meal
-Now that meal cards exist on Today and Trends shows daily averages, this is the natural next slice: show how each macro is distributed across breakfast/lunch/dinner. Helps with timing ("I keep eating 80% of my carbs at dinner"). Could live inline on each meal card as a tiny sparkline or pill row, or as a new section at the bottom of Trends.
-
-### iCloud / CloudKit sync across devices
 Convert SwiftData container to use CloudKit. Data syncs to other Apple devices automatically.
 
-⚠️ **Requires the paid Apple Developer Program ($99/year).** Free Apple ID accounts cannot enable iCloud capability. Confirmed — the iCloud capability simply doesn't appear in the Xcode capability picker on a free team.
+⚠️ **Requires the paid Apple Developer Program ($99/year).** Free Apple ID accounts cannot enable iCloud capability. Confirmed — the iCloud capability doesn't appear in Xcode's picker on a free team. (HealthKit DOES work — that's a separate entitlement.)
 
 ⚠️ **Major schema audit:** every property on every `@Model` class must become optional or have a default value. Final reset is required, after which proper lightweight migrations replace the delete-and-reinstall workflow.
 
@@ -179,48 +129,53 @@ Worth doing only if Mike (a) actually starts using a second Apple device, or (b)
 
 ---
 
-## Tier 3 — Polish & advanced
+### Tier 3 — polish & new capabilities
 
-### UI polish across the board
-- Animated number transitions (stat tiles smoothly counting up when you add an entry).
+**Recipe support**
+
+"I made stir-fry with chicken, rice, broccoli, soy sauce." Save the combination as a named recipe so you can log it as one item next time. Simplest model: a recipe is just a saved meal of multiple FoodEntry rows that get inserted together. ~1.5h.
+
+⚠️ Schema change required (new `@Model` class). Could bundle into a future schema session if other items pile up.
+
+**Real OCR of nutrition labels**
+
+Photo of nutrition facts panel → parsed into a CachedFood entry. ClaudeVisionService can already do this with a different prompt and UI route. Fills the Open Food Facts gap for unbranded / private-label products. No schema change. ~30 min.
+
+**EditEntrySheet totals mode (deferred from v1.7)**
+
+The Manual entry totals toggle is per-serving-only on the edit side. Adding totals editing is doable but tricky — the existing entry is already in per-serving form, and re-deriving on every keystroke gets confusing. Defer until/unless it actually bites. (Date AND time editing IS supported as of v1.8.3.)
+
+**UI polish across the board**
+- Animated number transitions (stat tiles smoothly counting up).
 - Better empty states with illustrations.
 - Dark mode tuning.
 - Custom typography — currently very system-default.
-- Tinted variant of the app icon for iOS appearance modes (currently same image used for all).
+- Tinted variant of the app icon for iOS appearance modes.
 - Clean up the wonky indentation in BarcodeScannerSheet's ConfirmFoodView call (cosmetic only).
 
-### Recipe support
-"I made stir-fry with chicken, rice, broccoli, soy sauce." Save the combination as a named recipe so you can log it as one item next time. Simplest model: a recipe is just a saved meal of multiple FoodEntry rows that get inserted together.
+**Public release**
 
-⚠️ Schema change required (new `@Model` class). Could be bundled into a v1.9+ schema session if other items pile up.
-
-### Real OCR of nutrition labels
-Photo of nutrition facts panel → parsed into a CachedFood entry. Claude can already do this with the existing photo flow, just needs a different prompt and UI route. Fills the Open Food Facts gap nicely. No schema change.
-
-### EditEntrySheet totals mode (deferred from v1.7)
-The Manual entry totals toggle is per-serving-only on the edit side. Adding totals editing is doable but tricky — the existing entry is already in per-serving form, and re-deriving on every keystroke gets confusing. Defer until/unless someone actually asks.
-
-### Public release
-Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, privacy policy, marketing site. Also requires: replacing the AI-generated devil-fruit icon with original art. A few-day project on its own. The code's structured well enough that this isn't a big lift technically — the work is all in the surrounding artifacts.
+Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, privacy policy, marketing site. Also requires: replacing the AI-generated devil-fruit icon with original art. A few-day project on its own. The code is structured well enough that this isn't a big lift technically — the work is in the surrounding artifacts.
 
 ---
 
-## What I'd do next if I were you
+## What I'd do next
 
-The app is in a really good place at v1.7.1. Date navigation closes the last big daily-friction gap — you can now fix forgotten logs from any past day, view trends with confidence in the data, and the totals-mode toggle removes the manual-entry footgun. Combined with v1.6's meal-card dashboard and Most Used, the daily-driver loop is tight.
+The app is in a really good place at v1.8.6. Tier 1 + Tier 2 (minus iCloud) are fully shipped — that's seven version bumps in the last session. The daily-driver loop is now genuinely tight:
+- Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
+- Past-day support works end-to-end with proper time fidelity.
+- Editing is fully flexible — every field, date, time, plus delete-with-undo.
+- Trends shows longitudinal weight, macros, distribution by meal, and per-nutrient averages.
+- Apple Health mirrors everything; reminders nudge from outside the app.
 
-In rough order:
+In rough order for next time:
 
-1. **Use the app for 7–14 real days** before adding more features. v1.7.1 is the first version where Trends has meaningful data AND you can fix retroactively. You'll need real usage to see what patterns emerge and what new friction surfaces.
+1. **Use the app for 7–14 real days** before adding more features. v1.8.6 is the first version where the smart-suggestion banner can actually surface (needs 14 days of patterned data). Real usage will tell whether the heuristic is right.
 
-2. **v1.8 schema-change bundle** — water undo, weight tracking, custom meal schedules. One reinstall covers all three. Probably 1–2 hours.
+2. **Recipe support** — highest-value Tier 3 item. Single new `@Model` + a new sheet to compose and a Most-Used-style integration point. Schema change so bundle anything else that's pending.
 
-3. **EditEntrySheet date picker + past-day timestamp picker** — small Tier 2 items that close the editing-flexibility loop. ~30 min combined.
+3. **OCR of nutrition labels** — quick win once recipes are in. Adds value for unbranded products not in Open Food Facts.
 
-4. **Smart auto-fill or notifications** — pick whichever feels more useful after a couple weeks of use. Auto-fill if logging speed is the friction; notifications if remembering to log is the friction.
+4. **UI polish** — low-priority, but a tinted app icon variant and a few small empty-state illustrations would round things out.
 
-5. **Apple Health integration** — once weight tracking is in, this becomes the natural unlock. Pairs especially well with iPhone's existing fitness data.
-
-6. **CloudKit + App Store** — gated on the $99 decision. Still deferred.
-
-The remaining big items (CloudKit, recipes, public release) are all gated on either money, time, or both. Defer until pulled.
+5. **CloudKit + App Store** — gated on the $99 decision. Still deferred.
