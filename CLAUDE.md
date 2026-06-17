@@ -1,6 +1,6 @@
 # FoodJournal — Project Context
 
-A personal iOS nutrition tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote, no collaborators. Personal use only — not on App Store. Currently v1.8.6.
+A personal iOS nutrition tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote, no collaborators. Personal use only — not on App Store. Currently v1.9.
 
 Read SETUP.md for full feature reference. Read ROADMAP.md for pending work.
 
@@ -44,7 +44,7 @@ Schema changes (any new fields on `@Model` classes) require app reinstall on dev
 2. User long-presses app icon on phone → Remove App → Delete App.
 3. User runs from Xcode (⌘R) for fresh install.
 
-Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry). v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6 were schema-clean.
+Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry). v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9** were schema-clean.
 
 ## Hard rules
 
@@ -92,6 +92,10 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **Smart suggestions are master-toggle gated (v1.8.6).** TodayView's banner only renders when `usualSuggestionsEnabled` (default true), on today, inside an active meal window (breakfast/lunch/dinner + 1h grace), with no entries already logged for that meal, and the user hasn't dismissed it for today.
 
+- **Calories burned is read-only, queried on demand, never cached locally (v1.9).** `showCaloriesBurnedFromHealth` (`@AppStorage`, default false) gates every UI surface (Today energy strip, Trends Energy section, Net calories goal row in Settings, energy.csv in export). Reads come from `HealthService.readActiveEnergy / readBasalEnergy / readEnergySummary` and `readActiveEnergy(from:to:) / readBasalEnergy(from:to:)` for ranges. Today re-fetches on `selectedDate` change; Trends re-fetches on range change. Independent from the v1.8.2 write toggle (`healthSyncEnabled`) — user can have either, both, or neither on.
+
+- **Net calories goal uses a sentinel-0 fallback.** Stored as `@AppStorage("netCaloriesGoal")` Double. Value `0` means "track the user's daily calorie goal automatically"; any other value is treated as a user override. The Settings field uses a computed Binding that returns `calorieGoal` when stored is 0 and writes through to AppStorage on edit. Same pattern in TodayView's `effectiveNetGoal`. Keeps v1.9 schema-clean (no new field on `UserGoals`).
+
 ## Recurring pitfalls (do not re-make these mistakes)
 
 - **HealthKit: do NOT include `HKCorrelationType(.food)` in `requestAuthorization`'s `toShare:` set.** It crashes with `NSInvalidArgumentException: Authorization to share the following types is disallowed: HKCorrelationTypeIdentifierFood`. Confirmed during v1.8.2 development. Only request quantity types.
@@ -112,6 +116,10 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **TaskGroup-based timeouts on HK calls don't actually cancel the underlying HKHealthStore work.** The HK auth API doesn't honor `Task.cancel()`. Don't add fake timeouts that desync UI state.
 
+- **HealthKit read permissions cannot be probed for grant state.** Apple intentionally returns "not determined" instead of "denied" on `authorizationStatus(for:)` for read-only types — privacy protection. For the v1.9 "Show calories burned" toggle, we can detect ERRORS from `requestAuthorization` (HK unavailable, etc.) but we CANNOT detect user denial. The handler reverts the toggle only on actual error; if the user denies in the prompt, the toggle stays on and the UI shows "—" because reads return no samples. Don't try to invent denial detection by probing — it'll be unreliable.
+
+- **Nil ≠ 0 applies to burn data too (v1.9).** Days with no Active Energy samples (watch off your wrist) MUST be excluded from averages, never treated as zero. `HealthService.readActiveEnergy(from:to:)` and `readBasalEnergy(from:to:)` return dicts where absent days are absent (not present with value 0). Trends' Avg Net only counts days with BOTH consumed and burn data. CSV's energy.csv leaves nil cells empty.
+
 ## File map (where to look)
 
 - `FoodJournalApp.swift` — entry point, SwiftData container with 7 model types, owns NotificationCoordinator + registers as UN delegate.
@@ -123,16 +131,16 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
   - `KeychainStore.swift` — parameterized key storage (anthropic + usda).
   - `NotificationService.swift` (v1.8.1) — daily meal reminder scheduling.
   - `NotificationCoordinator.swift` (v1.8.1) — `@Observable` UN delegate for foreground display + tap-to-deep-link.
-  - `HealthService.swift` (v1.8.2) — contains both `HealthService` (low-level HK ops) and `HealthSync` (orchestration). Read the file's header comments for the correlation-type gotcha.
+  - `HealthService.swift` (v1.8.2, extended in v1.9) — contains both `HealthService` (low-level HK ops including v1.9 active/basal energy reads — single-day and range) and `HealthSync` (write orchestration for v1.8.2). Read the file's header comments for the correlation-type gotcha. v1.9 added `requestEnergyReadAuthorization()` for the standalone read-only toggle.
   - `UsualSuggestionService.swift` (v1.8.6) — heuristic for "your usual breakfast/lunch/dinner" suggestion banner.
 - `Views/RootView.swift` — TabView root, hoisted `selectedDate`, watches `NotificationCoordinator.pendingMealOpen` for deep-link to MealDetailSheet.
-- `Views/TodayView.swift` — date-navigable dashboard. Hosts WaterEntriesSheet (nested) + MealDetailSheet (nested). Smart-suggestion banner (v1.8.6) sits above the daily totals card. Meal cards show P/C/F line below calories (v1.8.4). EntryRow recognizes `source == "suggestion"` for sparkles icon.
+- `Views/TodayView.swift` — date-navigable dashboard. Hosts WaterEntriesSheet (nested) + MealDetailSheet (nested). Smart-suggestion banner (v1.8.6) sits above the daily totals card. v1.9 energy strip (Consumed / Burned / Net / Active) sits between daily totals and water, gated by `showCaloriesBurnedFromHealth`. Meal cards show P/C/F line below calories (v1.8.4). EntryRow recognizes `source == "suggestion"` for sparkles icon. `StatTile.progress` is `Double?`; nil hides the bar (used by Consumed/Burned/Active).
 - `Views/AddFoodView.swift` — date-aware add tab + past-day banner + MostUsedSheet (nested).
-- `Views/TrendsView.swift` — range picker, per-section averages, Weight section (always visible since v1.8), Distribution by meal section (v1.8.4), nested WeightEntriesSheet for log/manage.
+- `Views/TrendsView.swift` — range picker, per-section averages, Weight section (always visible since v1.8), v1.9 Energy section (Avg Active / Avg Total Burned / Avg Net) shown when `showCaloriesBurnedFromHealth` is on (parallel to Weight, outside the food-data gate), Distribution by meal section (v1.8.4), nested WeightEntriesSheet for log/manage.
 - `Views/SearchSheet.swift` — library + USDA search + library swipe-add (v1.7.3) with HealthSync wiring (v1.8.2).
 - `Views/NutritionBreakdownSheet.swift` — full 19-nutrient breakdown by selectedDate.
 - `Views/BarcodeScannerSheet.swift`, `Views/PhotoLogSheet.swift` — scanner + photo log. PhotoLogSheet was rewritten in v1.8.5 around `images: [UIImage]` for multi-photo.
-- `Views/CSVExportSheet.swift` — exports food/water/weight CSVs (v1.8.2 added weight).
+- `Views/CSVExportSheet.swift` — exports food/water/weight CSVs (v1.8.2 added weight; v1.9 adds energy.csv when `showCaloriesBurnedFromHealth` is on — per-day active/basal/total/consumed/net columns, nil → empty cell).
 - `Views/NutrientGoalsSheet.swift` — editable goals for the 14 secondary nutrients.
 - `Views/AuxViews.swift` — ConfirmFoodView, ManualEntrySheet, EditEntrySheet, SettingsView (now contains Meal time schedule, Reminders, Smart suggestions, Apple Health sections), AnthropicKeySheet, USDAKeySheet, RelogSheet (dormant), dismissKeyboard, SelectAllOnFocus modifier, Haptic helper. Large file (~70KB) — search by `struct` keyword to navigate.
 

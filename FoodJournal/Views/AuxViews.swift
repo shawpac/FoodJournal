@@ -628,7 +628,21 @@ struct SettingsView: View {
     // attempt when an entry has a populated healthSampleID.
     @AppStorage("healthSyncEnabled") private var healthSyncEnabled: Bool = false
 
+    // v1.9 — Read-only Apple Health integration for calories burned.
+    // Independent of healthSyncEnabled: the user may have either, both, or
+    // neither toggle on. Enabling this triggers a separate read-only auth
+    // prompt for activeEnergyBurned + basalEnergyBurned.
+    @AppStorage("showCaloriesBurnedFromHealth") private var showCaloriesBurnedFromHealth: Bool = false
+
+    // Net Calories goal. Stored separately from the @Model UserGoals to keep
+    // v1.9 schema-clean. Sentinel 0 = "not yet customized; fall back to the
+    // dailycalorie goal dynamically". This way the field tracks the user's
+    // calorie goal until they explicitly type a different number, after
+    // which it becomes independent.
+    @AppStorage("netCaloriesGoal") private var netCaloriesGoalStored: Double = 0
+
     @State private var showingHealthPermissionAlert = false
+    @State private var showingEnergyReadPermissionAlert = false
     @State private var importingWeights = false
     @State private var importSummary: String?
 
@@ -641,6 +655,9 @@ struct SettingsView: View {
                     goalField("Carbs",    value: $carbsGoal,   suffix: "g")
                     goalField("Fat",      value: $fatGoal,     suffix: "g")
                     goalField("Water",    value: $waterGoalOz, suffix: "oz")
+                    if showCaloriesBurnedFromHealth {
+                        goalField("Net calories", value: netCaloriesGoalBinding, suffix: "")
+                    }
                 }
 
                 Section {
@@ -768,10 +785,15 @@ struct SettingsView: View {
                                 .foregroundStyle(.green)
                         }
                     }
+
+                    Toggle("Show calories burned", isOn: $showCaloriesBurnedFromHealth)
+                        .onChange(of: showCaloriesBurnedFromHealth) { _, newValue in
+                            handleEnergyReadToggle(enabled: newValue)
+                        }
                 } header: {
                     Text("Apple Health")
                 } footer: {
-                    Text("When enabled, new food, water, and weight entries are mirrored to the Health app. Edits and deletes are kept in sync. Off by default.")
+                    Text("Sync mirrors food, water, and weight TO Health (off by default). Show calories burned reads activeEnergyBurned + basalEnergyBurned FROM Health and surfaces them on Today and Trends, with a Net calories goal in Daily goals. The two toggles are independent.")
                 }
 
                 Section("Data") {
@@ -844,6 +866,12 @@ struct SettingsView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text("To sync to Apple Health, allow access in the Settings app under Privacy & Security → Health.")
+            }
+            .alert("Apple Health is unavailable", isPresented: $showingEnergyReadPermissionAlert) {
+                Button("Open Settings") { openSystemSettings() }
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text("Could not request access to active and basal energy. Open the Settings app under Privacy & Security → Health → FoodJournal to manage permissions manually.")
             }
             .onAppear { reload() }
             .sheet(isPresented: $showingNutrientGoals) {
@@ -1059,6 +1087,42 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    /// v1.9 — separate handler for the read-only "Show calories burned" toggle.
+    /// HK intentionally hides read-grant status to protect user privacy, so
+    /// we can't reliably detect "user denied." If the requestAuthorization
+    /// call itself errors (HK unavailable, etc.) we revert + surface the
+    /// alert. Otherwise we leave the toggle on; the UI will show "—" when
+    /// reads return nothing.
+    private func handleEnergyReadToggle(enabled: Bool) {
+        guard enabled else { return }
+        guard HealthService.isAvailable else {
+            showCaloriesBurnedFromHealth = false
+            return
+        }
+        Task {
+            let ok = await HealthService.requestEnergyReadAuthorization()
+            if !ok {
+                await MainActor.run {
+                    showCaloriesBurnedFromHealth = false
+                    showingEnergyReadPermissionAlert = true
+                }
+            }
+        }
+    }
+
+    /// Dynamic binding for the Net calories goal. Sentinel 0 means "track the
+    /// calorie goal automatically"; any other value is treated as a user
+    /// override. When the user types into the field we write the typed value;
+    /// when the field is read for display, we substitute calorieGoal if the
+    /// stored value is 0. Keeps the field useful before the user has ever
+    /// touched it.
+    private var netCaloriesGoalBinding: Binding<Double> {
+        Binding<Double>(
+            get: { netCaloriesGoalStored > 0 ? netCaloriesGoalStored : calorieGoal },
+            set: { netCaloriesGoalStored = $0 }
+        )
     }
 
     private func importWeightsFromHealth() {

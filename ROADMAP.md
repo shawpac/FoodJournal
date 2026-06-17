@@ -1,10 +1,24 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.8.6. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v1.9. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v1.9 — Calories burned from Apple Health (read-only)
+
+**Closes the loop on Apple Health: writes were v1.8.2, reads land here. Net calories now visible everywhere it matters.**
+
+- ✅ New HealthService energy reads: `readActiveEnergy(on:)`, `readBasalEnergy(on:)`, `readEnergySummary(on:)` (parallel fetch), plus range variants `readActiveEnergy(from:to:)` and `readBasalEnergy(from:to:)` returning `[Date: Double]` dicts keyed by start-of-day. Active and basal energy added to the HealthKit READ types only — read-only by design.
+- ✅ New `requestEnergyReadAuthorization()` prompts only for the energy types, used by the standalone toggle.
+- ✅ New Settings → Apple Health → "Show calories burned" toggle, independent from the existing "Sync to Apple Health" master toggle. Two toggles, two flows, two purposes.
+- ✅ Today: a second 4-tile strip appears below the daily totals card — Consumed / Burned / Net / Active. Net shows a progress bar against the configurable Net calories goal; the other three are bare tiles. Re-fetches on selectedDate change so past-day navigation works.
+- ✅ Trends: new Energy section (parallel to Weight, outside the food-data gate) — Avg Active, Avg Total Burned, Avg Net. Avg Net only counts days with BOTH consumed and burn data. Days with no burn samples are excluded from all three averages (nil ≠ 0).
+- ✅ Net calories goal stored via `@AppStorage("netCaloriesGoal")` with sentinel-0 fallback: 0 = "track the daily calorie goal automatically." Computed binding in Settings, computed property in TodayView. No schema change to `UserGoals`.
+- ✅ CSV export adds a 4th file (energy.csv) when toggle is on — date, activeEnergyKcal, basalEnergyKcal, totalBurnedKcal, consumedKcal, netCaloriesKcal. One row per day with any non-nil data. Nil cells empty.
+- ✅ `StatTile.progress` is now `Double?`; nil hides the bar. Existing 4 main-card tiles still pass non-optional Doubles (Swift wraps implicitly).
+- ✅ Schema-clean. No reinstall.
 
 ### v1.8.6 — Smart "your usual?" suggestions
 
@@ -161,7 +175,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a really good place at v1.8.6. Tier 1 + Tier 2 (minus iCloud) are fully shipped — that's seven version bumps in the last session. The daily-driver loop is now genuinely tight:
+The app is in a really good place at v1.9. Tier 1 + Tier 2 (minus iCloud) are fully shipped, and v1.9 closes the loop on the Apple Health integration. The daily-driver loop is now genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.

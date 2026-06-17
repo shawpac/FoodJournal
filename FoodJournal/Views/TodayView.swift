@@ -37,6 +37,12 @@ struct TodayView: View {
 
     @AppStorage("usualSuggestionsEnabled") private var usualSuggestionsEnabled: Bool = true
 
+    // v1.9 — read-only HealthKit energy strip. Hidden when toggle is off.
+    // Fetched on view appear and on selectedDate change; never cached locally.
+    @AppStorage("showCaloriesBurnedFromHealth") private var showCaloriesBurnedFromHealth: Bool = false
+    @AppStorage("netCaloriesGoal") private var netCaloriesGoalStored: Double = 0
+    @State private var energyForSelectedDay: (active: Double?, basal: Double?) = (nil, nil)
+
     @Query(sort: \FoodEntry.loggedAt, order: .reverse) private var allEntries: [FoodEntry]
     @Query private var goalsList: [UserGoals]
     @Query(sort: \WaterEntry.loggedAt, order: .reverse) private var allWater: [WaterEntry]
@@ -124,6 +130,9 @@ struct TodayView: View {
                             suggestionBanner(suggestion)
                         }
                         dailyTotalsCard
+                        if showCaloriesBurnedFromHealth {
+                            energyStripCard
+                        }
                         waterCard
                         ForEach(mealOrder, id: \.self) { meal in
                             mealSummaryCard(meal: meal)
@@ -223,7 +232,26 @@ struct TodayView: View {
                     pendingMealKey = nil
                 }
             }
+            // v1.9 — re-fetch energy on selectedDate change. The .task id
+            // combines the date with the toggle so flipping the toggle ON
+            // also triggers an immediate fetch.
+            .task(id: energyFetchKey) {
+                await reloadEnergyForSelectedDay()
+            }
         }
+    }
+
+    private var energyFetchKey: String {
+        "\(showCaloriesBurnedFromHealth)|\(selectedDate.timeIntervalSince1970)"
+    }
+
+    private func reloadEnergyForSelectedDay() async {
+        guard showCaloriesBurnedFromHealth else {
+            energyForSelectedDay = (nil, nil)
+            return
+        }
+        let summary = await HealthService.readEnergySummary(on: selectedDate)
+        energyForSelectedDay = summary
     }
 
     // MARK: - Date picker sheet
@@ -314,6 +342,71 @@ struct TodayView: View {
         .sheet(isPresented: $showingBreakdown) {
                     NutritionBreakdownSheet(selectedDate: selectedDate)
                 }
+    }
+
+    // MARK: - Energy strip (v1.9)
+
+    /// Effective Net calories goal — sentinel 0 in storage means "fall back
+    /// to the daily calorie goal." Mirrors SettingsView's binding semantics.
+    private var effectiveNetGoal: Double {
+        netCaloriesGoalStored > 0 ? netCaloriesGoalStored : goals.calorieGoal
+    }
+
+    private var totalBurned: Double? {
+        switch (energyForSelectedDay.active, energyForSelectedDay.basal) {
+        case let (a?, b?): return a + b
+        case let (a?, nil): return a
+        case let (nil, b?): return b
+        case (nil, nil):   return nil
+        }
+    }
+
+    private var netCalories: Double? {
+        guard let burned = totalBurned else { return nil }
+        return totals.cal - burned
+    }
+
+    private func dashOrInt(_ v: Double?) -> String {
+        guard let v else { return "—" }
+        return "\(Int(v.rounded()))"
+    }
+
+    private var energyStripCard: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 12) {
+                StatTile(
+                    label: "Consumed",
+                    value: "\(Int(totals.cal))",
+                    sub: "kcal",
+                    progress: nil,
+                    color: .orange
+                )
+                StatTile(
+                    label: "Burned",
+                    value: dashOrInt(totalBurned),
+                    sub: "kcal",
+                    progress: nil,
+                    color: .red
+                )
+                StatTile(
+                    label: "Net",
+                    value: dashOrInt(netCalories),
+                    sub: "/ \(Int(effectiveNetGoal))",
+                    progress: netCalories.map { $0 / max(effectiveNetGoal, 1) },
+                    color: .blue
+                )
+                StatTile(
+                    label: "Active",
+                    value: dashOrInt(energyForSelectedDay.active),
+                    sub: "kcal",
+                    progress: nil,
+                    color: .pink
+                )
+            }
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16))
     }
 
     // MARK: - Water
@@ -658,7 +751,9 @@ struct TodayView: View {
         let label: String
         let value: String
         let sub: String
-        let progress: Double
+        /// nil → no progress bar rendered (energy strip uses this for the
+        /// Consumed/Burned/Active tiles which have no per-tile goal).
+        let progress: Double?
         let color: Color
 
         var body: some View {
@@ -676,8 +771,10 @@ struct TodayView: View {
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                ProgressView(value: min(progress, 1))
-                    .tint(color)
+                if let progress {
+                    ProgressView(value: min(max(progress, 0), 1))
+                        .tint(color)
+                }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10)

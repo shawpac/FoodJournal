@@ -23,6 +23,9 @@ struct CSVExportSheet: View {
     @State private var errorMessage: String?
     @State private var lastSummary: String?
 
+    // v1.9 — only include energy.csv when the read toggle is on.
+    @AppStorage("showCaloriesBurnedFromHealth") private var showCaloriesBurnedFromHealth: Bool = false
+
     var body: some View {
         NavigationStack {
             Form {
@@ -50,7 +53,7 @@ struct CSVExportSheet: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } footer: {
-                    Text("Generates three CSV files (food entries, water entries, weight entries) and opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
+                    Text("Generates CSV files for food, water, and weight entries, plus an energy file when calories-burned sync is on. Opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
                 }
 
                 if let lastSummary {
@@ -98,7 +101,11 @@ struct CSVExportSheet: View {
         isGenerating = true
         errorMessage = nil
         lastSummary = nil
+        Task { await performExport() }
+    }
 
+    @MainActor
+    private func performExport() async {
         // Calendar-aware: include the entire end day (up to but not including next midnight).
         let cal = Calendar.current
         let rangeStart = cal.startOfDay(for: startDate)
@@ -144,6 +151,20 @@ struct CSVExportSheet: View {
             let waterCSV = buildWaterCSV(from: waters)
             let weightCSV = buildWeightCSV(from: weights)
 
+            // v1.9 — energy.csv only when the toggle is on. Health reads are
+            // async so we await them; the rest of the export stays sync.
+            var energyCSV: String? = nil
+            var energyDayCount: Int = 0
+            if showCaloriesBurnedFromHealth {
+                async let active = HealthService.readActiveEnergy(from: rangeStart, to: rangeEnd)
+                async let basal  = HealthService.readBasalEnergy(from:  rangeStart, to: rangeEnd)
+                let (activeMap, basalMap) = await (active, basal)
+                let consumedMap = consumedByDay(foods)
+                let result = buildEnergyCSV(active: activeMap, basal: basalMap, consumed: consumedMap)
+                energyCSV = result.csv
+                energyDayCount = result.dayCount
+            }
+
             // Filename: FoodJournal-food-2026-04-03-to-2026-05-03.csv
             let dfFile = DateFormatter()
             dfFile.dateFormat = "yyyy-MM-dd"
@@ -155,24 +176,47 @@ struct CSVExportSheet: View {
             let foodURL = tmp.appendingPathComponent("FoodJournal-food-\(startStr)-to-\(endStr).csv")
             let waterURL = tmp.appendingPathComponent("FoodJournal-water-\(startStr)-to-\(endStr).csv")
             let weightURL = tmp.appendingPathComponent("FoodJournal-weight-\(startStr)-to-\(endStr).csv")
+            let energyURL = tmp.appendingPathComponent("FoodJournal-energy-\(startStr)-to-\(endStr).csv")
 
             // Overwrite if a previous export with the same range is still in tmp
             try? FileManager.default.removeItem(at: foodURL)
             try? FileManager.default.removeItem(at: waterURL)
             try? FileManager.default.removeItem(at: weightURL)
+            try? FileManager.default.removeItem(at: energyURL)
 
             try foodCSV.write(to: foodURL, atomically: true, encoding: .utf8)
             try waterCSV.write(to: waterURL, atomically: true, encoding: .utf8)
             try weightCSV.write(to: weightURL, atomically: true, encoding: .utf8)
 
-            shareItems = [foodURL, waterURL, weightURL]
-            lastSummary = "Prepared \(foods.count) food + \(waters.count) water + \(weights.count) weight entries."
+            var items: [URL] = [foodURL, waterURL, weightURL]
+            if let energyCSV {
+                try energyCSV.write(to: energyURL, atomically: true, encoding: .utf8)
+                items.append(energyURL)
+            }
+            shareItems = items
+
+            var summary = "Prepared \(foods.count) food + \(waters.count) water + \(weights.count) weight entries."
+            if energyCSV != nil {
+                summary += " Energy: \(energyDayCount) day\(energyDayCount == 1 ? "" : "s")."
+            }
+            lastSummary = summary
             isGenerating = false
             isShareSheetPresented = true
         } catch {
             errorMessage = "Export failed: \(error.localizedDescription)"
             isGenerating = false
         }
+    }
+
+    /// Sums each food entry's calories (scaled by servings) by calendar day.
+    private func consumedByDay(_ foods: [FoodEntry]) -> [Date: Double] {
+        let cal = Calendar.current
+        var out: [Date: Double] = [:]
+        for f in foods {
+            let day = cal.startOfDay(for: f.loggedAt)
+            out[day, default: 0] += f.calories * f.servings
+        }
+        return out
     }
 
     // MARK: - CSV builders
@@ -254,6 +298,53 @@ struct CSVExportSheet: View {
             lines.append(row)
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// One row per calendar day in the union of (active, basal, consumed)
+    /// non-empty sets. Nil values render as empty cells — preserves nil ≠ 0.
+    /// Returns (csv, dayCount) so the summary line can mention coverage.
+    private func buildEnergyCSV(
+        active: [Date: Double],
+        basal: [Date: Double],
+        consumed: [Date: Double]
+    ) -> (csv: String, dayCount: Int) {
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        let allDays = Set(active.keys).union(basal.keys).union(consumed.keys)
+        let sortedDays = allDays.sorted()
+
+        var lines: [String] = [
+            "date,activeEnergyKcal,basalEnergyKcal,totalBurnedKcal,consumedKcal,netCaloriesKcal"
+        ]
+        for day in sortedDays {
+            let a = active[day]
+            let b = basal[day]
+            let c = consumed[day]
+            // Total burned = a + b when either present; nil only when both nil.
+            let total: Double?
+            switch (a, b) {
+            case let (a?, b?): total = a + b
+            case let (a?, nil): total = a
+            case let (nil, b?): total = b
+            case (nil, nil):   total = nil
+            }
+            // Net = consumed − total burned, only when both are known.
+            let net: Double?
+            if let c, let total { net = c - total } else { net = nil }
+
+            let row = [
+                dateFmt.string(from: day),
+                a.map(num) ?? "",
+                b.map(num) ?? "",
+                total.map(num) ?? "",
+                c.map(num) ?? "",
+                net.map(num) ?? ""
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        return (lines.joined(separator: "\n") + "\n", sortedDays.count)
     }
 
     private func buildWeightCSV(from entries: [WeightEntry]) -> String {

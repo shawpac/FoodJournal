@@ -4,7 +4,7 @@ A personal iOS nutrition tracker. Native SwiftUI + SwiftData, runs entirely on-d
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v1.8.6)
+## Current state (v1.9)
 
 **Working features**
 
@@ -14,6 +14,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **All cards reflect the selected day:** daily totals, water tracking, meal-card subtotals, and Full breakdown.
 - **Daily totals card:** four equally-sized horizontal stat tiles (Calories / Protein / Carbs / Fat) with progress bars against your daily goal.
 - **Water tracking card:** progress bar, custom-amount entry with Log (negatives supported), tap the count to set total directly, long-press the count to see and delete individual water entries. Logging water on a past day uses the picker time if set, else noon.
+- **Energy strip (v1.9):** a second row of 4 stat tiles below the daily totals — Consumed (from FoodEntry) / Burned (Active + Basal from Apple Health) / Net (Consumed − Burned, can go negative) / Active (Active Energy only from Health). The Net tile shows a progress bar against the configurable Net calories goal. Tiles display "—" when burn data is unavailable. Hidden when "Show calories burned" is off in Settings.
 - **Meal-card dashboard:** four cards always visible — Breakfast, Lunch, Dinner, Snack. Each shows the per-meal calorie subtotal AND a P/C/F gram subtitle (v1.8.4) below. Empty meals are ghosted with `—`.
 - **Tap any meal card → MealDetailSheet:** focused sheet for that meal with totals, all entries listed, swipe-left to soft-delete (with 5-second undo), tap any entry to edit all fields plus date AND time (v1.8.3), and a four-button "+ Add to {meal}" section. Picking an entry point pre-tags meal context AND selected date.
 - **"Your usual breakfast?" banner (v1.8.6):** orange-tinted banner above the daily totals card. Appears during a meal's time window (with 1h grace) when you've logged the same food for that meal ≥ 3 times in the last 14 days. Tap = one-tap log with 5-second undo. X to dismiss for the rest of today. Opt out in Settings.
@@ -43,6 +44,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - 4th tab. Range selector: 7 days / 30 days / Custom (with date pickers).
 - **Weight section (v1.8, always visible):** Latest weight, average over range, change in range (green ↓ / orange ↑). NavigationLink → WeightEntriesSheet for logging + swipe-delete + 5-second undo. Skipped Health-imported entries don't delete from Health on soft-delete commit.
 - **Macros (daily average)** for calories + protein + carbs + fat with goal progress bars.
+- **Energy section (v1.9, always visible when "Show calories burned" is on):** Avg Active, Avg Total Burned, Avg Net (consumed − total burned). Avg Net only includes days with BOTH consumed and burn data. Days with no burn samples are excluded from all three averages.
 - **Distribution by meal (v1.8.4):** four rows (Breakfast / Lunch / Dinner / Snacks), each with `Cal X% · P X% · C X% · F X%` chips showing share of range total per macro.
 - **Water (daily average)** with goal bar.
 - **Honest "based on N of M days" caption** when coverage is partial. Preserves nil ≠ 0.
@@ -79,6 +81,13 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Tap a fired notification → app opens to Today tab → MealDetailSheet for that meal opens (deep link).
 - Daily-repeating `UNCalendarNotificationTrigger`. Re-scheduling on time change replaces the previous request (same identifier).
 
+*Apple Health calories burned (v1.9 — read-only)*
+- New separate toggle in Settings → Apple Health → "Show calories burned" (independent of the master Sync toggle). Defaults off.
+- First toggle ON triggers HealthKit's read-permission prompt for `activeEnergyBurned` + `basalEnergyBurned`. The toggle stays ON regardless of grant outcome — HK intentionally hides read-grant status. If the user denies, the UI shows "—".
+- Reads are on-demand and not cached locally. Today re-queries on selectedDate change; Trends re-queries on range change.
+- Net calories goal (configurable in Daily goals when this toggle is on). Stored via `@AppStorage` with sentinel-0 fallback: 0 = "track the daily calorie goal automatically." Schema-clean.
+- CSV export adds a 4th file (energy.csv) when this toggle is on. Columns: date, activeEnergyKcal, basalEnergyKcal, totalBurnedKcal, consumedKcal, netCaloriesKcal. One row per day with any non-nil data. Nil → empty cell.
+
 *Apple Health sync (v1.8.2)*
 - Master toggle in Settings → Apple Health → "Sync to Apple Health." Defaults off.
 - First toggle ON triggers HealthKit's per-type permission sheet (~20 toggles inside). Denial reverts the toggle.
@@ -101,7 +110,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Meal time schedule** (v1.8): per-meal start/end pickers + Reset to defaults.
 - **Reminders** (v1.8.1): per-meal toggle + time picker.
 - **Smart suggestions** (v1.8.6): single toggle.
-- **Apple Health** (v1.8.2): master toggle + Import weight button.
+- **Apple Health** (v1.8.2 + v1.9): two independent toggles — "Sync to Apple Health" (write food/water/weight) and "Show calories burned" (read active + basal energy). Import weight button visible when sync is on.
 - **Data section:** Export data (now exports food + water + weight CSVs), Reset food library.
 - **API keys section:** compact rows with Set/Not set status.
 
@@ -203,7 +212,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. So far: v1.8 and v1.8.2 required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6 were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. So far: v1.8 and v1.8.2 required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 

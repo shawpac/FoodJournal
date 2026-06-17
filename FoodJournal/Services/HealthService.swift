@@ -41,8 +41,26 @@ enum HealthService {
         return set
     }
 
+    /// Quantity types we ever READ. These are surfaced in the master sync
+    /// permission sheet AND requested separately by the v1.9 "Show calories
+    /// burned" toggle. Adding new read-only types here is sufficient; the
+    /// energy-specific auth helper handles the standalone prompt.
+    static var readQuantityIDs: [HKQuantityTypeIdentifier] {
+        [.bodyMass, .activeEnergyBurned, .basalEnergyBurned]
+    }
+
     static var allReadTypes: Set<HKObjectType> {
-        [HKQuantityType(.bodyMass)]
+        var set: Set<HKObjectType> = []
+        for id in readQuantityIDs {
+            set.insert(HKQuantityType(id))
+        }
+        return set
+    }
+
+    /// Just the energy read types — used by the v1.9 standalone toggle so we
+    /// only prompt for the permissions that toggle actually needs.
+    static var energyReadTypes: Set<HKObjectType> {
+        [HKQuantityType(.activeEnergyBurned), HKQuantityType(.basalEnergyBurned)]
     }
 
     // MARK: Authorization
@@ -57,6 +75,22 @@ enum HealthService {
             try await store.requestAuthorization(toShare: allWriteTypes, read: allReadTypes)
             let energy = HKQuantityType(.dietaryEnergyConsumed)
             return store.authorizationStatus(for: energy) == .sharingAuthorized
+        } catch {
+            return false
+        }
+    }
+
+    /// Requests READ-only auth for activeEnergyBurned + basalEnergyBurned.
+    /// Used by the v1.9 "Show calories burned" toggle. Returns false only
+    /// when the call itself errors (HK unavailable, etc.) — HK intentionally
+    /// hides read-grant status to protect user privacy, so we cannot tell
+    /// here whether the user actually granted. Caller treats "no samples on
+    /// a populated day" as "either denied or no data" and displays "—".
+    static func requestEnergyReadAuthorization() async -> Bool {
+        guard isAvailable else { return false }
+        do {
+            try await store.requestAuthorization(toShare: [], read: energyReadTypes)
+            return true
         } catch {
             return false
         }
@@ -213,6 +247,101 @@ enum HealthService {
         let uuid: String
         let weightLbs: Double
         let date: Date
+    }
+
+    // MARK: Energy reads (v1.9 — read-only)
+
+    /// Sums all samples of the given energy type for the calendar day of `date`.
+    /// Returns nil if no samples exist OR if the read errors. Nil ≠ 0 here:
+    /// a day with no Active Energy data (watch off your wrist) should display
+    /// "—", not 0.
+    private static func sumEnergyKcal(
+        _ id: HKQuantityTypeIdentifier,
+        from start: Date,
+        to end: Date
+    ) async -> Double? {
+        guard isAvailable else { return nil }
+        let type = HKQuantityType(id)
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let descriptor = HKStatisticsQueryDescriptor(
+            predicate: HKSamplePredicate.quantitySample(type: type, predicate: predicate),
+            options: .cumulativeSum
+        )
+        do {
+            let statistics = try await descriptor.result(for: store)
+            guard let sum = statistics?.sumQuantity() else { return nil }
+            return sum.doubleValue(for: HKUnit.kilocalorie())
+        } catch {
+            return nil
+        }
+    }
+
+    static func readActiveEnergy(on date: Date) async -> Double? {
+        let (start, end) = dayBounds(of: date)
+        return await sumEnergyKcal(.activeEnergyBurned, from: start, to: end)
+    }
+
+    static func readBasalEnergy(on date: Date) async -> Double? {
+        let (start, end) = dayBounds(of: date)
+        return await sumEnergyKcal(.basalEnergyBurned, from: start, to: end)
+    }
+
+    /// Parallel fetch of both active and basal energy for a single day. Used
+    /// by the Today energy strip — one call site for both queries cuts the
+    /// fetch latency roughly in half.
+    static func readEnergySummary(on date: Date) async -> (active: Double?, basal: Double?) {
+        async let active = readActiveEnergy(on: date)
+        async let basal  = readBasalEnergy(on: date)
+        return await (active, basal)
+    }
+
+    /// Per-day energy sums across a date range. Returns a dict keyed by
+    /// start-of-day. Days with no data are absent from the dict — never
+    /// present with value 0. Used by TrendsView's Energy averages.
+    private static func energyByDay(
+        _ id: HKQuantityTypeIdentifier,
+        from rangeStart: Date,
+        to rangeEnd: Date
+    ) async -> [Date: Double] {
+        guard isAvailable else { return [:] }
+        let cal = Calendar.current
+        let anchor = cal.startOfDay(for: rangeStart)
+        let type = HKQuantityType(id)
+        let predicate = HKQuery.predicateForSamples(withStart: anchor, end: rangeEnd, options: .strictStartDate)
+        let descriptor = HKStatisticsCollectionQueryDescriptor(
+            predicate: HKSamplePredicate.quantitySample(type: type, predicate: predicate),
+            options: .cumulativeSum,
+            anchorDate: anchor,
+            intervalComponents: DateComponents(day: 1)
+        )
+        do {
+            let collection = try await descriptor.result(for: store)
+            var result: [Date: Double] = [:]
+            collection.enumerateStatistics(from: anchor, to: rangeEnd) { stat, _ in
+                if let sum = stat.sumQuantity() {
+                    let day = cal.startOfDay(for: stat.startDate)
+                    result[day] = sum.doubleValue(for: HKUnit.kilocalorie())
+                }
+            }
+            return result
+        } catch {
+            return [:]
+        }
+    }
+
+    static func readActiveEnergy(from: Date, to: Date) async -> [Date: Double] {
+        await energyByDay(.activeEnergyBurned, from: from, to: to)
+    }
+
+    static func readBasalEnergy(from: Date, to: Date) async -> [Date: Double] {
+        await energyByDay(.basalEnergyBurned, from: from, to: to)
+    }
+
+    private static func dayBounds(of date: Date) -> (start: Date, end: Date) {
+        let cal = Calendar.current
+        let start = cal.startOfDay(for: date)
+        let end = cal.date(byAdding: .day, value: 1, to: start) ?? date
+        return (start, end)
     }
 
     /// Reads all bodyMass samples in Health NOT written by FoodJournal itself

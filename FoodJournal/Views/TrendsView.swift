@@ -7,6 +7,12 @@ struct TrendsView: View {
     @Query(sort: \WeightEntry.loggedAt, order: .reverse) private var allWeights: [WeightEntry]
     @Query private var goalsList: [UserGoals]
 
+    // v1.9 — read-only HealthKit energy aggregates for the selected range.
+    // Refetched whenever the range changes or the toggle flips.
+    @AppStorage("showCaloriesBurnedFromHealth") private var showCaloriesBurnedFromHealth: Bool = false
+    @State private var activeByDay: [Date: Double] = [:]
+    @State private var basalByDay: [Date: Double] = [:]
+
     enum RangePreset: String, CaseIterable, Identifiable {
         case sevenDays = "7 days"
         case thirtyDays = "30 days"
@@ -167,6 +173,84 @@ struct TrendsView: View {
         return Stat(average: sum / Double(n), daysWithData: n, totalDays: totalDays)
     }
 
+    // MARK: - Energy averages (v1.9)
+
+    /// Active is straightforward: average over days that have any active
+    /// samples. Missing days are excluded (nil ≠ 0).
+    private func avgActiveStat() -> Stat {
+        let inRange = activeByDay.filter { $0.key >= dateRange.start && $0.key <= dateRange.end }
+        let n = inRange.count
+        guard n > 0 else { return Stat(average: nil, daysWithData: 0, totalDays: totalDays) }
+        let sum = inRange.values.reduce(0, +)
+        return Stat(average: sum / Double(n), daysWithData: n, totalDays: totalDays)
+    }
+
+    /// Total Burned = Active + Basal. A day "has data" if either is present;
+    /// we sum what's there for that day. Days with neither are excluded.
+    private func avgTotalBurnedStat() -> Stat {
+        let cal = Calendar.current
+        let activeInRange = activeByDay.filter { $0.key >= dateRange.start && $0.key <= dateRange.end }
+        let basalInRange  = basalByDay.filter  { $0.key >= dateRange.start && $0.key <= dateRange.end }
+        let allDays = Set(activeInRange.keys).union(basalInRange.keys)
+        var totalByDay: [Date: Double] = [:]
+        for day in allDays {
+            let a = activeInRange[day] ?? 0
+            let b = basalInRange[day] ?? 0
+            let total = a + b
+            if total > 0 { totalByDay[cal.startOfDay(for: day)] = total }
+        }
+        let n = totalByDay.count
+        guard n > 0 else { return Stat(average: nil, daysWithData: 0, totalDays: totalDays) }
+        let sum = totalByDay.values.reduce(0, +)
+        return Stat(average: sum / Double(n), daysWithData: n, totalDays: totalDays)
+    }
+
+    /// Net = Consumed − Total Burned. Included ONLY on days where both
+    /// consumed (from FoodEntry) and burn (from HK) exist. Days missing
+    /// either are excluded — preserves nil ≠ 0 honesty.
+    private func avgNetStat() -> Stat {
+        let cal = Calendar.current
+        var consumedByDay: [Date: Double] = [:]
+        for entry in entriesInRange {
+            let day = cal.startOfDay(for: entry.loggedAt)
+            consumedByDay[day, default: 0] += entry.calories * entry.servings
+        }
+        var netByDay: [Date: Double] = [:]
+        for (day, consumed) in consumedByDay {
+            let a = activeByDay[day]
+            let b = basalByDay[day]
+            let burn: Double?
+            switch (a, b) {
+            case let (a?, b?): burn = a + b
+            case let (a?, nil): burn = a
+            case let (nil, b?): burn = b
+            case (nil, nil):   burn = nil
+            }
+            guard let burn else { continue }
+            netByDay[day] = consumed - burn
+        }
+        let n = netByDay.count
+        guard n > 0 else { return Stat(average: nil, daysWithData: 0, totalDays: totalDays) }
+        let sum = netByDay.values.reduce(0, +)
+        return Stat(average: sum / Double(n), daysWithData: n, totalDays: totalDays)
+    }
+
+    private var energyFetchKey: String {
+        "\(showCaloriesBurnedFromHealth)|\(preset.rawValue)|\(customStart.timeIntervalSince1970)|\(customEnd.timeIntervalSince1970)"
+    }
+
+    private func reloadEnergyForRange() async {
+        guard showCaloriesBurnedFromHealth else {
+            activeByDay = [:]
+            basalByDay = [:]
+            return
+        }
+        async let active = HealthService.readActiveEnergy(from: dateRange.start, to: dateRange.end)
+        async let basal  = HealthService.readBasalEnergy(from:  dateRange.start, to: dateRange.end)
+        activeByDay = await active
+        basalByDay  = await basal
+    }
+
     // MARK: - View
 
     var body: some View {
@@ -209,6 +293,22 @@ struct TrendsView: View {
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
+                    }
+                }
+
+                // v1.9 — Energy section is always visible when the toggle is
+                // on, so users with burn data but no food data still see Avg
+                // Active + Avg Total Burned. Avg Net naturally shows "—" via
+                // nutrientRow when consumed-and-burn overlap is empty.
+                if showCaloriesBurnedFromHealth {
+                    Section {
+                        nutrientRow(label: "Avg Active",       stat: avgActiveStat(),       goal: nil, unit: "kcal", asInt: true)
+                        nutrientRow(label: "Avg Total Burned", stat: avgTotalBurnedStat(),  goal: nil, unit: "kcal", asInt: true)
+                        nutrientRow(label: "Avg Net",          stat: avgNetStat(),          goal: nil, unit: "kcal", asInt: true)
+                    } header: {
+                        Text("Energy")
+                    } footer: {
+                        Text("Read from Apple Health. Avg Net counts only days where both consumed and burn data exist; missing days are excluded (nil ≠ 0).")
                     }
                 }
 
@@ -281,6 +381,9 @@ struct TrendsView: View {
                 }
             }
             .navigationTitle("Trends")
+            .task(id: energyFetchKey) {
+                await reloadEnergyForRange()
+            }
         }
     }
 
