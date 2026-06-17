@@ -54,7 +54,7 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **Edit existing files directly via filesystem.** Don't generate large paste-blocks for the user. AuxViews.swift is now ~70KB; surgical paste-edits drift and silently fail. Direct edits avoid this entire class of bugs.
 
-- **Never push to a remote.** No GitHub, no GitLab. Local only.
+- **Don't push to a remote unless explicitly asked.** The repo has a GitHub remote at `github.com/shawpac/FoodJournal`, but commits stay local-only by default. Push is a deliberate action triggered by the user saying "push it," "add it to my github," etc. — never a side effect of shipping a feature.
 
 - **Don't bypass the SwiftUI DatePicker `in: ...Date.now` constraint.** Future dates are blocked app-wide.
 
