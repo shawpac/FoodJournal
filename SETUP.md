@@ -4,7 +4,7 @@ A personal iOS nutrition + fitness tracker. Display name on the home screen is *
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.1a)
+## Current state (v2.1a.1)
 
 **Working features**
 
@@ -107,7 +107,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Reads workouts from Apple Health (HKWorkout samples) on demand — never cached locally, matching the v1.9 invariant. Refreshes on tab appear and pull-to-refresh.
 - First open requests READ permission for HKWorkout + activeEnergyBurned + distanceWalkingRunning + distanceCycling via the existing `NSHealthShareUsageDescription` privacy string.
 - **Today summary card** at top: three stat tiles — Workouts count today / Active calories today (kcal) / Total duration today (`1h 5m` style). All three show `—` when no workouts logged today (nil ≠ 0).
-- **Apple Fitness list section** below: last 30 days of workouts, newest first, grouped by day (Today / Yesterday / `Mon, May 4`). Each row shows activity SF Symbol + display name, start time, duration, active calories (or `—`), and miles for run/walk/hike/cycle only (never for strength/yoga/etc.). Empty state if no workouts: "No workouts found" — phrased so denied permission and genuine-no-data are indistinguishable (HealthKit hides read-grant status).
+- **Apple Fitness section (split in v2.1a.1)**: shows ONLY today's workouts inline so the daily-use controls below stay reachable without a long scroll. A "See previous workouts ›" navigation row pushes a separate `WorkoutHistoryView` page listing the rest of the last 30 days grouped by day (Yesterday / `Mon, May 4`), newest first. Same row styling on both: activity SF Symbol + display name, start time, duration, active calories (or `—`), miles for run/walk/hike/cycle only. Empty states: "No workouts logged today." inline when today is empty but earlier days have data; the full "No workouts found" card only when the 30-day window has nothing at all.
 - Composable section structure leaves room for v2.1's daily bodyweight tracker and strength routines without re-architecting.
 - Active calories come from `workout.statistics(for: .activeEnergyBurned)` (the modern API; the deprecated `workout.totalEnergyBurned` is NOT used). Distance maps `running/walking/hiking → distanceWalkingRunning` and `cycling → distanceCycling`; everything else is nil.
 
@@ -217,12 +217,16 @@ FoodJournal/
     ├── AddFoodView.swift               date-aware add tab, past-day banner
     ├── TrendsView.swift                Weight section (always-visible), Distribution
     │                                    by meal section, WeightEntriesSheet
-    ├── WorkoutView.swift               v2.0 + v2.1a: Workouts tab. Today summary +
-    │                                    Apple Fitness list (on-demand HK reads) +
-    │                                    Daily section (pushup/situp append cards +
+    ├── WorkoutView.swift               v2.0 + v2.1a + v2.1a.1: Workouts tab. Today
+    │                                    summary + Apple Fitness (today inline only,
+    │                                    "See previous workouts ›" pushes the rest)
+    │                                    + Daily section (pushup/situp append cards +
     │                                    stretch toggle) + Strength section (nav rows
     │                                    opening Routines / Log session / History
     │                                    sheets). Composable sections.
+    ├── WorkoutHistoryView.swift        v2.1a.1: full-page Apple Fitness history pushed
+    │                                    from Workouts tab. Receives pre-filtered
+    │                                    previous-workouts array, no new HK query.
     ├── DailyRepsSheet.swift            v2.1a: manage today's individual ExerciseRepEntry
     │                                    bursts for one kind. Mirrors WaterEntriesSheet.
     ├── RoutinesSheet.swift             v2.1a: list/create/edit/delete StrengthRoutines
@@ -264,7 +268,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import) were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), **v2.1a.1 (Apple Fitness split — view-only)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 

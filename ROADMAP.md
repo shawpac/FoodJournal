@@ -1,10 +1,21 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.1a. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.1a.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.1a.1 — Apple Fitness split into inline-today + history page
+
+**The Workouts tab was too tall: a 30-day Apple Fitness list pushed the daily-use controls (pushups / situps / stretch, strength) far down. Split fixes the scroll problem.**
+
+- ✅ Apple Fitness section on the Workouts tab now shows ONLY today's workouts inline, with the same row styling as before.
+- ✅ Below today's rows: a new "See previous workouts ›" navigation row pushes a new `WorkoutHistoryView` page listing the rest of the last 30 days grouped by day, newest first. The page omits "Today" headers by construction.
+- ✅ Empty-state UX preserved with a finer breakdown: "No workouts logged today." inline when today is empty but earlier days have data; the original full "No workouts found" card only when the entire 30-day window is empty (and the "See previous workouts" row is hidden).
+- ✅ No new HealthKit query and no new auth — `WorkoutHistoryView` receives the parent's pre-filtered `previousWorkouts` array. Matches the v1.9 invariant: HK data is read on demand, never cached locally; the parent owns the fetch.
+- ✅ Cleaned up the now-dead `groupedWorkouts` / `dayHeader` / `DayGroup` helpers from `WorkoutView` — they were specific to the old multi-day inline list and the equivalents now live in `WorkoutHistoryView` where they apply.
+- ✅ Schema-clean. View reorganization only — no models, no FoodJournalApp.swift change.
 
 ### v2.1a — Strength routines + sessions + daily reps tracker (schema change)
 
