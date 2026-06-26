@@ -553,3 +553,187 @@ enum LibraryFoodUpsert {
         context.insert(lib)
     }
 }
+
+// MARK: - v2.1a — Strength + Daily tracker models
+//
+// First @Models in the project that use SwiftData @Relationship. Two patterns
+// are at play:
+//   • Flat models: ExerciseRepEntry, StretchDay. No relationships.
+//   • Nested cascade: StrengthSession → LoggedExercise → LoggedSet, plus
+//     StrengthRoutine → RoutineExercise. Each parent owns its children with
+//     `deleteRule: .cascade`. The child carries the explicit back-pointer so
+//     SwiftData can resolve the inverse for nested cascades. Pattern matches
+//     Apple's @Relationship(inverse:) recommendation: declare the inverse on
+//     the parent side so the cascade rule and inverse stay together.
+//
+// IMPORTANT: NO HealthKit fields on any of these models. Strength data has no
+// HealthKit type (weight/reps/sets aren't tracked there), and the user wears
+// an Apple Watch which already captures calories — writing duplicate workouts
+// from in-app strength logging would double-count. Daily reps (pushups/situps)
+// and stretch toggle also have no HealthKit type. All v2.1a data is in-app
+// only.
+
+// MARK: ExerciseRepEntry (daily bursts of pushups/situps)
+/// Append-style burst log: each "I did 25 pushups" tap creates one row.
+/// Today's displayed count is the SUM of today's non-soft-deleted entries
+/// of that kind. Mirrors the WaterEntry model + soft-delete pattern.
+@Model
+final class ExerciseRepEntry {
+    var id: UUID
+    /// "pushups" | "situps". Free-form String so future kinds (squats, lunges)
+    /// can be added without a schema change.
+    var kind: String
+    /// Always a real count — you don't log a burst without a number, so this
+    /// is non-optional. Distinct from the routine-target Int? fields below.
+    var count: Int
+    var loggedAt: Date
+    var pendingDeleteAt: Date?
+
+    init(kind: String, count: Int, loggedAt: Date = .now, pendingDeleteAt: Date? = nil) {
+        self.id = UUID()
+        self.kind = kind
+        self.count = count
+        self.loggedAt = loggedAt
+        self.pendingDeleteAt = pendingDeleteAt
+    }
+}
+
+// MARK: StretchDay (binary "did I stretch today" flag)
+/// One row per calendar day. `date` is normalized to startOfDay so the
+/// uniqueness check on lookup is straightforward. Binary by design — no
+/// "how long did I stretch?" tracking yet.
+@Model
+final class StretchDay {
+    /// Start-of-day in the user's calendar. Use Calendar.current.startOfDay(for:)
+    /// when constructing.
+    @Attribute(.unique) var date: Date
+    var stretched: Bool
+
+    init(date: Date, stretched: Bool = false) {
+        self.date = date
+        self.stretched = stretched
+    }
+}
+
+// MARK: StrengthRoutine (reusable template)
+/// A named template (e.g. "Push day A"). Contains an ordered list of
+/// RoutineExercises (display targets only — never copied into a session's
+/// stored set values).
+@Model
+final class StrengthRoutine {
+    var routineID: UUID
+    var name: String
+    var order: Int
+    var createdAt: Date
+
+    /// Cascade: deleting a routine deletes its target lines. Inverse declared
+    /// here so RoutineExercise.routine resolves automatically.
+    @Relationship(deleteRule: .cascade, inverse: \RoutineExercise.routine)
+    var exercises: [RoutineExercise] = []
+
+    init(routineID: UUID = UUID(), name: String, order: Int = 0, createdAt: Date = .now) {
+        self.routineID = routineID
+        self.name = name
+        self.order = order
+        self.createdAt = createdAt
+    }
+}
+
+// MARK: RoutineExercise (one target line on a routine)
+/// A target line on a routine — name + optional planned sets/reps/weight.
+/// Numeric fields are Int?/Double? so "no target" stays distinguishable from
+/// a literal 0. Display-only when a session is logged against the routine.
+@Model
+final class RoutineExercise {
+    var name: String
+    var targetSets: Int?
+    var targetReps: Int?
+    var targetWeightLbs: Double?
+    var order: Int
+    /// Back-pointer to the owning routine. SwiftData fills this in via the
+    /// inverse declared on StrengthRoutine.exercises.
+    var routine: StrengthRoutine?
+
+    init(name: String,
+         targetSets: Int? = nil,
+         targetReps: Int? = nil,
+         targetWeightLbs: Double? = nil,
+         order: Int = 0) {
+        self.name = name
+        self.targetSets = targetSets
+        self.targetReps = targetReps
+        self.targetWeightLbs = targetWeightLbs
+        self.order = order
+    }
+}
+
+// MARK: StrengthSession (one workout performed)
+/// One actual workout session. Owns its LoggedExercises which own their
+/// LoggedSets — a two-level cascade. Soft-delete via pendingDeleteAt matches
+/// FoodEntry / WaterEntry / WeightEntry; UI applies the 5-second undo pattern.
+@Model
+final class StrengthSession {
+    var loggedAt: Date
+    /// Snapshot of the routine's name at the time of logging. Stored as plain
+    /// String, NOT a relationship — so renaming or deleting the routine
+    /// doesn't retroactively change history.
+    var routineName: String?
+    /// Optional informational field. NEVER written to Apple Health — see the
+    /// header comment for why strength sessions stay in-app.
+    var durationMinutes: Double?
+    var pendingDeleteAt: Date?
+
+    /// Cascade: deleting a session cascades to its exercises, which cascade
+    /// to their sets. Inverse declared here.
+    @Relationship(deleteRule: .cascade, inverse: \LoggedExercise.session)
+    var exercises: [LoggedExercise] = []
+
+    init(loggedAt: Date = .now,
+         routineName: String? = nil,
+         durationMinutes: Double? = nil,
+         pendingDeleteAt: Date? = nil) {
+        self.loggedAt = loggedAt
+        self.routineName = routineName
+        self.durationMinutes = durationMinutes
+        self.pendingDeleteAt = pendingDeleteAt
+    }
+}
+
+// MARK: LoggedExercise (one exercise performed in a session)
+/// One exercise inside a session. Holds NO numeric data of its own — all
+/// numbers live on its LoggedSets. Owns those sets with cascade.
+@Model
+final class LoggedExercise {
+    var name: String
+    var order: Int
+    /// Back-pointer to the owning session.
+    var session: StrengthSession?
+
+    @Relationship(deleteRule: .cascade, inverse: \LoggedSet.exercise)
+    var sets: [LoggedSet] = []
+
+    init(name: String, order: Int = 0) {
+        self.name = name
+        self.order = order
+    }
+}
+
+// MARK: LoggedSet (per-set detail — the point of strength tracking)
+/// One performed set. Weight and reps are Int?/Double? — a set logged with
+/// no weight (e.g. body-weight pull-up) stays nil, never 0. setNumber is
+/// auto-assigned in the log UI and used purely for display order.
+@Model
+final class LoggedSet {
+    var weightLbs: Double?
+    var reps: Int?
+    var setNumber: Int
+    /// Back-pointer to the owning exercise.
+    var exercise: LoggedExercise?
+
+    init(weightLbs: Double? = nil, reps: Int? = nil, setNumber: Int) {
+        self.weightLbs = weightLbs
+        self.reps = reps
+        self.setNumber = setNumber
+    }
+}
+

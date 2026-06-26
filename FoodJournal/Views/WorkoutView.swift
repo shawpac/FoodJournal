@@ -1,13 +1,19 @@
 import SwiftUI
+import SwiftData
 
 /// v2.0 — Workouts tab. Reads HKWorkout samples from Apple Health on demand
 /// (no local caching, matching the v1.9 invariant). The body is composed as
-/// a sequence of optional sections so v2.1 can add a daily bodyweight tracker
-/// and strength-training routines without re-architecting.
+/// a sequence of sections so v2.1+ can add more without re-architecting.
+///
+/// v2.1a — Added the **Daily** section (pushup / situp burst log + stretch
+/// toggle) and the **Strength** section (entry points to manage routines,
+/// log a session, and browse history). Both surfaces sit alongside the
+/// existing Apple Fitness section.
 ///
 /// State is self-contained: this view does NOT share RootView's selectedDate
 /// binding, matching the precedent set by Trends and Settings.
 struct WorkoutView: View {
+    @Environment(\.modelContext) private var context
 
     /// Lookback window for the Apple Fitness list. Tunable — 30 days keeps
     /// the fetch fast while covering a meaningful history. Today's summary is
@@ -18,16 +24,30 @@ struct WorkoutView: View {
     @State private var hasRequestedAuth = false
     @State private var isLoading = false
 
+    // v2.1a — Daily section state
+    @Query(sort: \ExerciseRepEntry.loggedAt, order: .reverse)
+    private var allRepEntries: [ExerciseRepEntry]
+    @Query private var allStretchDays: [StretchDay]
+
+    @State private var pushupInput: String = ""
+    @State private var situpInput: String = ""
+    @State private var managingKind: String?  // "pushups" or "situps" — drives the DailyRepsSheet
+
+    // v2.1a — Strength section state
+    @Query private var allStrengthSessions: [StrengthSession]
+
+    @State private var showingRoutines = false
+    @State private var showingLogSession = false
+    @State private var showingHistory = false
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
                     todaySummaryCard
                     appleFitnessSection
-                    // v2.1 section slots — leave the structure here so future
-                    // additions plug in without touching the loader / state:
-                    // dailyBodyweightSection
-                    // strengthRoutinesSection
+                    dailySection            // v2.1a
+                    strengthSection         // v2.1a
                 }
                 .padding()
             }
@@ -43,7 +63,28 @@ struct WorkoutView: View {
             .refreshable {
                 await reloadWorkouts()
             }
+            .sheet(item: Binding(
+                get: { managingKind.map { KindID(kind: $0) } },
+                set: { managingKind = $0?.kind }
+            )) { id in
+                DailyRepsSheet(kind: id.kind)
+            }
+            .sheet(isPresented: $showingRoutines) {
+                RoutinesSheet()
+            }
+            .sheet(isPresented: $showingLogSession) {
+                LogSessionSheet()
+            }
+            .sheet(isPresented: $showingHistory) {
+                SessionHistorySheet()
+            }
         }
+    }
+
+    // sheet(item:) needs an Identifiable wrapper around a String.
+    private struct KindID: Identifiable {
+        let kind: String
+        var id: String { kind }
     }
 
     // MARK: - Loading
@@ -227,6 +268,221 @@ struct WorkoutView: View {
             Spacer()
         }
         .padding(.leading, 4)
+    }
+
+    // MARK: - Daily section (v2.1a)
+    //
+    // Pushups + situps are append-style: each "Log" tap inserts a new
+    // ExerciseRepEntry with the typed count. The big number shown above
+    // each input is the SUM of today's non-soft-deleted entries of that
+    // kind — "–" when zero entries today (nil ≠ 0 honesty).
+    //
+    // Stretch is binary: one StretchDay row per day. Tapping toggles. If
+    // there's no row for today, the toggle creates one.
+
+    private var todayRepEntries: [ExerciseRepEntry] {
+        let cal = Calendar.current
+        return allRepEntries.filter {
+            cal.isDateInToday($0.loggedAt) && $0.pendingDeleteAt == nil
+        }
+    }
+
+    private func todayCount(kind: String) -> Int {
+        todayRepEntries.filter { $0.kind == kind }.reduce(0) { $0 + $1.count }
+    }
+
+    /// Sum string. Returns "–" when there are zero non-soft-deleted entries
+    /// today (not "0") — the user requirement: an untracked count shows "–"
+    /// not "0".
+    private func todayDisplay(kind: String) -> String {
+        let entries = todayRepEntries.filter { $0.kind == kind }
+        guard !entries.isEmpty else { return "–" }
+        return "\(entries.reduce(0) { $0 + $1.count })"
+    }
+
+    private var stretchedToday: Bool {
+        let today = Calendar.current.startOfDay(for: .now)
+        return allStretchDays.contains { Calendar.current.isDate($0.date, inSameDayAs: today) && $0.stretched }
+    }
+
+    private var dailySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Daily")
+            VStack(spacing: 12) {
+                repsCard(kind: "pushups", label: "Pushups", input: $pushupInput)
+                repsCard(kind: "situps", label: "Situps", input: $situpInput)
+                stretchCard
+            }
+        }
+    }
+
+    private func repsCard(kind: String, label: String, input: Binding<String>) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text(label)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    managingKind = kind
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(todayDisplay(kind: kind))
+                            .font(.title3.monospacedDigit())
+                            .foregroundStyle(.orange)
+                        Image(systemName: "pencil")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+
+            HStack(spacing: 8) {
+                TextField("Count", text: input)
+                    .keyboardType(.numberPad)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color(.tertiarySystemGroupedBackground),
+                                in: RoundedRectangle(cornerRadius: 10))
+
+                Button {
+                    logReps(kind: kind, input: input)
+                } label: {
+                    Text("Log")
+                        .font(.callout.weight(.semibold))
+                        .frame(width: 64)
+                        .padding(.vertical, 10)
+                        .background(.orange, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .disabled(parseRepCount(input.wrappedValue) == nil)
+                .opacity(parseRepCount(input.wrappedValue) == nil ? 0.4 : 1)
+            }
+        }
+        .padding(16)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private var stretchCard: some View {
+        Button {
+            toggleStretchToday()
+        } label: {
+            HStack {
+                Text("Stretched today")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Spacer()
+                Image(systemName: stretchedToday ? "checkmark.circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(stretchedToday ? .green : .secondary)
+            }
+            .padding(16)
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func parseRepCount(_ s: String) -> Int? {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        guard let v = Int(trimmed), v > 0 else { return nil }
+        return v
+    }
+
+    private func logReps(kind: String, input: Binding<String>) {
+        guard let count = parseRepCount(input.wrappedValue) else { return }
+        Haptic.light()
+        let entry = ExerciseRepEntry(kind: kind, count: count, loggedAt: .now)
+        context.insert(entry)
+        input.wrappedValue = ""
+        dismissKeyboard()
+    }
+
+    private func toggleStretchToday() {
+        Haptic.light()
+        let today = Calendar.current.startOfDay(for: .now)
+        if let existing = allStretchDays.first(where: { Calendar.current.isDate($0.date, inSameDayAs: today) }) {
+            existing.stretched.toggle()
+        } else {
+            // First tap today — create the row in the "stretched" state.
+            context.insert(StretchDay(date: today, stretched: true))
+        }
+    }
+
+    // MARK: - Strength section (v2.1a)
+
+    private var activeSessions: [StrengthSession] {
+        allStrengthSessions.filter { $0.pendingDeleteAt == nil }
+    }
+
+    private var strengthSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader("Strength")
+            VStack(spacing: 0) {
+                strengthRow(
+                    label: "Routines",
+                    symbol: "list.bullet.rectangle.portrait",
+                    color: .orange
+                ) {
+                    showingRoutines = true
+                }
+                Divider().padding(.leading, 48)
+                strengthRow(
+                    label: "Log a session",
+                    symbol: "plus.square.fill",
+                    color: .pink
+                ) {
+                    showingLogSession = true
+                }
+                Divider().padding(.leading, 48)
+                strengthRow(
+                    label: "History",
+                    symbol: "clock.arrow.circlepath",
+                    color: .blue,
+                    trailing: "\(activeSessions.count) session\(activeSessions.count == 1 ? "" : "s")"
+                ) {
+                    showingHistory = true
+                }
+            }
+            .background(Color(.secondarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+    }
+
+    private func strengthRow(
+        label: String,
+        symbol: String,
+        color: Color,
+        trailing: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button {
+            action()
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .foregroundStyle(color)
+                    .frame(width: 32)
+                Text(label)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if let trailing {
+                    Text(trailing)
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Tile

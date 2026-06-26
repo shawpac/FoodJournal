@@ -7,6 +7,9 @@ struct FoodJournalApp: App {
     @State private var notificationCoordinator = NotificationCoordinator()
 
     var sharedModelContainer: ModelContainer = {
+        // v2.1a: 7 new models registered EXPLICITLY (don't rely on
+        // relationship inference to pull children in). Container holds 14
+        // model types total after this change.
         let schema = Schema([
                     FoodEntry.self,
                     UserGoals.self,
@@ -14,7 +17,16 @@ struct FoodJournalApp: App {
                     WaterEntry.self,
                     CachedPhotoEstimate.self,
                     LibraryFood.self,
-                    WeightEntry.self
+                    WeightEntry.self,
+                    // v2.1a — daily tracker
+                    ExerciseRepEntry.self,
+                    StretchDay.self,
+                    // v2.1a — strength: routines + sessions (nested cascade)
+                    StrengthRoutine.self,
+                    RoutineExercise.self,
+                    StrengthSession.self,
+                    LoggedExercise.self,
+                    LoggedSet.self
                 ])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         do {
