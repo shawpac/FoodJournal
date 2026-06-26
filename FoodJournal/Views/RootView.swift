@@ -30,9 +30,13 @@ struct RootView: View {
                 .tabItem { Label("Trends", systemImage: "chart.line.uptrend.xyaxis") }
                 .tag(2)
 
+            WorkoutView()
+                .tabItem { Label("Workouts", systemImage: "figure.run") }
+                .tag(3)
+
             SettingsView()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
-                .tag(3)
+                .tag(4)
         }
         .tint(.orange)
         .onChange(of: notificationCoordinator.pendingMealOpen) { _, newValue in

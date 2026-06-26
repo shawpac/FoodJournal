@@ -45,12 +45,17 @@ enum HealthService {
     /// permission sheet AND requested separately by the v1.9 "Show calories
     /// burned" toggle. Adding new read-only types here is sufficient; the
     /// energy-specific auth helper handles the standalone prompt.
+    /// v2.0 added the distance types for the Workouts tab.
     static var readQuantityIDs: [HKQuantityTypeIdentifier] {
-        [.bodyMass, .activeEnergyBurned, .basalEnergyBurned]
+        [.bodyMass, .activeEnergyBurned, .basalEnergyBurned,
+         .distanceWalkingRunning, .distanceCycling]
     }
 
     static var allReadTypes: Set<HKObjectType> {
-        var set: Set<HKObjectType> = []
+        // v2.0 — workoutType() is its own non-quantity HKObjectType. Included
+        // here so the master sync prompt also asks for workout permission
+        // when the user grants everything.
+        var set: Set<HKObjectType> = [HKObjectType.workoutType()]
         for id in readQuantityIDs {
             set.insert(HKQuantityType(id))
         }
@@ -61,6 +66,19 @@ enum HealthService {
     /// only prompt for the permissions that toggle actually needs.
     static var energyReadTypes: Set<HKObjectType> {
         [HKQuantityType(.activeEnergyBurned), HKQuantityType(.basalEnergyBurned)]
+    }
+
+    /// v2.0 — workout-tab read types. HKWorkout.statistics(for:) needs read
+    /// auth for the relevant quantity types, so we bundle them with the
+    /// workout type itself. Uses the existing NSHealthShareUsageDescription
+    /// string from v1.8.2; no new Info.plist entry needed.
+    static var workoutReadTypes: Set<HKObjectType> {
+        [
+            HKObjectType.workoutType(),
+            HKQuantityType(.activeEnergyBurned),
+            HKQuantityType(.distanceWalkingRunning),
+            HKQuantityType(.distanceCycling)
+        ]
     }
 
     // MARK: Authorization
@@ -90,6 +108,21 @@ enum HealthService {
         guard isAvailable else { return false }
         do {
             try await store.requestAuthorization(toShare: [], read: energyReadTypes)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// v2.0 — Requests READ-only auth for HKWorkout + the quantity types we
+    /// read off each workout (activeEnergyBurned + distanceWalking/Cycling).
+    /// Same privacy posture as the energy helper: HK won't tell us whether
+    /// the user granted, so we return false only on a real error. Callers
+    /// just attempt reads; absent data = "—" via nil ≠ 0.
+    static func requestWorkoutReadAuthorization() async -> Bool {
+        guard isAvailable else { return false }
+        do {
+            try await store.requestAuthorization(toShare: [], read: workoutReadTypes)
             return true
         } catch {
             return false
@@ -367,6 +400,111 @@ enum HealthService {
             }
         } catch {
             return []
+        }
+    }
+
+    // MARK: Workouts (v2.0 — read-only)
+
+    /// A flattened view of an HKWorkout for the UI. Plain struct, NOT a
+    /// @Model — workouts are queried on demand from HealthKit each time the
+    /// Workouts tab appears (matches the v1.9 invariant: HK data is never
+    /// cached locally).
+    struct WorkoutSummary: Identifiable, Hashable {
+        let id: UUID
+        let activityType: HKWorkoutActivityType
+        let displayName: String
+        let symbolName: String
+        let startDate: Date
+        let duration: TimeInterval
+        /// Sum of activeEnergyBurned samples within the workout's interval.
+        /// nil when no samples exist (e.g. logged manually without a Watch).
+        /// Nil ≠ 0 — the UI must display "—" for nil, never a fake zero.
+        let activeCalories: Double?
+        /// Distance in miles for run/walk/hike (distanceWalkingRunning) and
+        /// cycling (distanceCycling). nil for everything else AND for distance-
+        /// capable activities that happen to have no distance samples.
+        let distanceMiles: Double?
+    }
+
+    /// Reads HKWorkout samples in the given range, newest first, and projects
+    /// each into a WorkoutSummary. Returns [] on error (incl. missing read
+    /// auth — HK won't surface "denied" so we treat it as "no data").
+    ///
+    /// Uses HKWorkout.statistics(for:) to derive active calories and distance,
+    /// which is the modern API replacing the deprecated workout.totalEnergyBurned
+    /// (deprecated in iOS 18). Statistics within a workout's interval are
+    /// correct even for manually-logged sessions and Watch-recorded ones.
+    static func readWorkouts(from start: Date, to end: Date) async -> [WorkoutSummary] {
+        guard isAvailable else { return [] }
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: .strictStartDate)
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.workout(predicate)],
+            sortDescriptors: [SortDescriptor(\.startDate, order: .reverse)]
+        )
+        do {
+            let workouts = try await descriptor.result(for: store)
+            return workouts.map { workout in
+                summarize(workout: workout)
+            }
+        } catch {
+            return []
+        }
+    }
+
+    private static func summarize(workout: HKWorkout) -> WorkoutSummary {
+        let info = activityInfo(for: workout.workoutActivityType)
+        let energyType = HKQuantityType(.activeEnergyBurned)
+        let activeCal = workout.statistics(for: energyType)?
+            .sumQuantity()?
+            .doubleValue(for: HKUnit.kilocalorie())
+
+        // Pick the right distance type for this activity. nil → don't query;
+        // result is nil distance (e.g. strength training has no distance).
+        let distanceID: HKQuantityTypeIdentifier?
+        switch workout.workoutActivityType {
+        case .running, .walking, .hiking:
+            distanceID = .distanceWalkingRunning
+        case .cycling:
+            distanceID = .distanceCycling
+        default:
+            distanceID = nil
+        }
+        let distanceMiles: Double? = distanceID.flatMap { id in
+            workout.statistics(for: HKQuantityType(id))?
+                .sumQuantity()?
+                .doubleValue(for: HKUnit.mile())
+        }
+
+        return WorkoutSummary(
+            id: workout.uuid,
+            activityType: workout.workoutActivityType,
+            displayName: info.name,
+            symbolName: info.symbol,
+            startDate: workout.startDate,
+            duration: workout.duration,
+            activeCalories: activeCal,
+            distanceMiles: distanceMiles
+        )
+    }
+
+    /// HKWorkoutActivityType → display name + SF Symbol. Cover the common
+    /// types explicitly; everything else falls back to "Workout" with a
+    /// generic mixed-cardio glyph.
+    private static func activityInfo(for type: HKWorkoutActivityType) -> (name: String, symbol: String) {
+        switch type {
+        case .running:                          return ("Running", "figure.run")
+        case .walking:                          return ("Walking", "figure.walk")
+        case .hiking:                           return ("Hiking", "figure.hiking")
+        case .cycling:                          return ("Cycling", "figure.outdoor.cycle")
+        case .traditionalStrengthTraining:      return ("Strength training", "dumbbell.fill")
+        case .functionalStrengthTraining:       return ("Functional strength", "figure.strengthtraining.functional")
+        case .highIntensityIntervalTraining:    return ("HIIT", "figure.highintensity.intervaltraining")
+        case .yoga:                             return ("Yoga", "figure.yoga")
+        case .swimming:                         return ("Swimming", "figure.pool.swim")
+        case .coreTraining:                     return ("Core training", "figure.core.training")
+        case .elliptical:                       return ("Elliptical", "figure.elliptical")
+        case .rowing:                           return ("Rowing", "figure.rower")
+        default:                                return ("Workout", "figure.mixed.cardio")
         }
     }
 }

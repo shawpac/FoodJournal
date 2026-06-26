@@ -271,7 +271,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FoodJournal/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = FoodJournal;
+				INFOPLIST_KEY_CFBundleDisplayName = "MS Fitness";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan food barcodes for nutrition lookup";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "FoodJournal imports your weight entries from Apple Health so you don't have to retype them.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "FoodJournal writes your logged food, water, and weight to Apple Health so they appear in your daily nutrition summaries.";
@@ -309,7 +309,7 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = FoodJournal/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = FoodJournal;
+				INFOPLIST_KEY_CFBundleDisplayName = "MS Fitness";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Used to scan food barcodes for nutrition lookup";
 				INFOPLIST_KEY_NSHealthShareUsageDescription = "FoodJournal imports your weight entries from Apple Health so you don't have to retype them.";
 				INFOPLIST_KEY_NSHealthUpdateUsageDescription = "FoodJournal writes your logged food, water, and weight to Apple Health so they appear in your daily nutrition summaries.";
