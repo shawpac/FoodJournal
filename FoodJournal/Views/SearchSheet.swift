@@ -2,14 +2,18 @@ import SwiftUI
 import SwiftData
 
 // MARK: - SearchSheet
-/// Unified search across the local library and USDA FoodData Central.
-/// Library results stream in instantly. USDA results follow after a 300ms debounce
-/// so we don't hammer their API on every keystroke.
+/// Unified search across the local library + USDA FoodData Central + Open Food
+/// Facts. Library results stream in instantly. Remote sources (USDA + OFF) run
+/// concurrently after a 300ms debounce on the same keystroke; one failing
+/// source doesn't block the other.
 ///
-/// v1.7.3: library rows now support a leading-edge swipe → "Quick add" action that
-/// creates a FoodEntry directly with default amounts (100g for per-100g foods,
-/// 1 serving for per-serving foods), no Confirm screen. Late-night warning still
-/// fires for snacks in the configured window. 5-second undo toast.
+/// v1.7.3 — library rows have a leading-edge swipe → "Quick add" action that
+///   creates a FoodEntry directly (100g / 1 serving defaults), no Confirm.
+/// v2.2.1 — OFF is now a text-search source (was barcode-only). USDA + OFF
+///   are merged into one ranked list with per-row source tags. Cross-source
+///   dedupe collapses near-duplicates, preferring USDA on collisions. The
+///   existing "Include branded foods" toggle now gates both USDA Branded
+///   AND all OFF results (OFF is almost entirely branded).
 struct SearchSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var context
@@ -24,9 +28,13 @@ struct SearchSheet: View {
 
     @State private var query: String = ""
     @State private var libraryResults: [LibraryFood] = []
-    @State private var usdaResults: [USDAService.SearchHit] = []
-    @State private var isLoadingUSDA = false
-    @State private var usdaError: String?
+    /// Merged USDA + OFF results, deduped, ranked by relevance. See
+    /// `mergeAndDedupe(_:_:query:)` for the heuristic.
+    @State private var remoteResults: [MergedHit] = []
+    @State private var isLoadingRemote = false
+    /// Surfaces only when BOTH USDA and OFF errored. A single source erroring
+    /// is silently tolerated — partial coverage beats no coverage.
+    @State private var remoteError: String?
     @State private var includeBranded = false
 
     /// Wraps a Prefill so it can be passed to .sheet(item:). Identifiable per-presentation,
@@ -40,6 +48,14 @@ struct SearchSheet: View {
     /// Identifies the current in-flight USDA search so older searches can be ignored
     /// when the user keeps typing.
     @State private var searchToken: UUID = UUID()
+    /// Reference to the current debounce + remote-fetch Task. When a new
+    /// keystroke arrives we explicitly cancel this, which propagates down
+    /// through Swift structured concurrency to the URLSession.data() call —
+    /// the underlying URLSessionTask is cancelled instead of being left
+    /// in-flight. Fixes a "nginx 400" symptom from api.data.gov when fast
+    /// typing fires multiple rapid USDA requests over the same HTTP/2
+    /// connection.
+    @State private var remoteFetchTask: Task<Void, Never>?
 
     // MARK: Quick-add state (v1.7.3)
     /// The most recently added entry, undoable for 5 seconds. nil when no undo is active.
@@ -85,40 +101,45 @@ struct SearchSheet: View {
                             }
                         }
 
-                        if isLoadingUSDA {
+                        if isLoadingRemote {
                             Section {
                                 HStack {
                                     ProgressView()
-                                    Text("Searching USDA…")
+                                    Text("Searching food databases…")
                                         .foregroundStyle(.secondary)
                                 }
                                 .frame(maxWidth: .infinity, alignment: .center)
                             }
                         }
 
-                        if let usdaError {
+                        if let remoteError {
                             Section {
-                                Text(usdaError)
+                                Text(remoteError)
                                     .font(.callout)
                                     .foregroundStyle(.red)
                             }
                         }
 
-                        if !usdaResults.isEmpty {
+                        if !remoteResults.isEmpty {
                             Section {
-                                ForEach(usdaResults) { hit in
-                                    USDARow(hit: hit) {
-                                        pick(usda: hit)
+                                ForEach(remoteResults) { hit in
+                                    MergedRow(hit: hit) {
+                                        pick(merged: hit)
                                     }
                                 }
                             } header: {
-                                sectionHeader("USDA database", systemImage: "leaf")
+                                sectionHeader("Food databases", systemImage: "leaf")
                             } footer: {
-                                Toggle("Include branded foods", isOn: $includeBranded)
-                                    .font(.footnote)
-                                    .onChange(of: includeBranded) { _, _ in
-                                        runUSDASearch()
-                                    }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Toggle("Include branded foods", isOn: $includeBranded)
+                                        .font(.footnote)
+                                        .onChange(of: includeBranded) { _, _ in
+                                            runRemoteSearch()
+                                        }
+                                    Text("Branded toggle gates USDA Branded + Open Food Facts. USDA is lab-analyzed; OFF is crowd-sourced (denser branded coverage, more often partial).")
+                                        .font(.caption2)
+                                        .foregroundStyle(.tertiary)
+                                }
                             }
                         }
 
@@ -128,7 +149,7 @@ struct SearchSheet: View {
                                     Image(systemName: "magnifyingglass")
                                         .font(.largeTitle)
                                         .foregroundStyle(.tertiary)
-                                    Text("Type to search your foods or USDA's database.")
+                                    Text("Type to search your foods, USDA, or Open Food Facts.")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                         .multilineTextAlignment(.center)
@@ -186,7 +207,7 @@ struct SearchSheet: View {
             }
             .onChange(of: query) { _, newValue in
                 runLibrarySearch(newValue)
-                debounceUSDASearch(newValue)
+                debounceRemoteSearch(newValue)
             }
             .sheet(item: $pendingPick) { pick in
                 NavigationStack {
@@ -265,9 +286,9 @@ struct SearchSheet: View {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         return !trimmed.isEmpty
             && libraryResults.isEmpty
-            && usdaResults.isEmpty
-            && !isLoadingUSDA
-            && usdaError == nil
+            && remoteResults.isEmpty
+            && !isLoadingRemote
+            && remoteError == nil
     }
 
     // MARK: - Search execution
@@ -281,56 +302,260 @@ struct SearchSheet: View {
         libraryResults = LibraryService.search(trimmed, in: context)
     }
 
-    private func debounceUSDASearch(_ q: String) {
+    /// Schedule a remote (USDA + OFF) search 300ms after the last keystroke.
+    /// Cancels any in-flight fetch so rapid typing doesn't pile up
+    /// concurrent HTTPS requests on the same connection (which was triggering
+    /// nginx 400s from api.data.gov).
+    private func debounceRemoteSearch(_ q: String) {
         let trimmed = q.trimmingCharacters(in: .whitespaces)
-        usdaError = nil
-        usdaResults = []
+        remoteError = nil
+        remoteResults = []
+
+        // Cancel any prior debounce / fetch — propagates through Swift
+        // structured concurrency to the URLSession data tasks inside.
+        remoteFetchTask?.cancel()
+
         guard !trimmed.isEmpty else {
-            isLoadingUSDA = false
+            isLoadingRemote = false
             return
         }
 
         let token = UUID()
         searchToken = token
-        isLoadingUSDA = true
+        isLoadingRemote = true
 
-        Task {
+        remoteFetchTask = Task {
             try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce
+            if Task.isCancelled { return }
             guard token == searchToken else { return }
-            await performUSDASearch(query: trimmed, token: token)
+            await performRemoteSearch(query: trimmed, token: token)
         }
     }
 
-    /// Re-runs the USDA query (used when the branded toggle flips).
-    private func runUSDASearch() {
+    /// Re-runs the remote query without debouncing (used when the Branded
+    /// toggle flips — the user is explicitly changing scope, not typing).
+    private func runRemoteSearch() {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
+
+        // Same cancel-before-launch discipline as the debounce path.
+        remoteFetchTask?.cancel()
+
         let token = UUID()
         searchToken = token
-        isLoadingUSDA = true
-        usdaResults = []
-        usdaError = nil
+        isLoadingRemote = true
+        remoteResults = []
+        remoteError = nil
 
-        Task {
-            await performUSDASearch(query: trimmed, token: token)
+        remoteFetchTask = Task {
+            if Task.isCancelled { return }
+            await performRemoteSearch(query: trimmed, token: token)
         }
     }
 
-    private func performUSDASearch(query q: String, token: UUID) async {
-        do {
-            let hits = try await USDAService.search(q, includeBranded: includeBranded)
-            await MainActor.run {
-                guard token == searchToken else { return }
-                usdaResults = hits
-                isLoadingUSDA = false
+    /// Fires USDA and OFF concurrently. One failing source does NOT block the
+    /// other — partial coverage is preferred over an error wall. OFF is only
+    /// queried when `includeBranded` is on (OFF's catalog is overwhelmingly
+    /// branded; querying it for `includeBranded=false` would clutter the
+    /// generic-food experience).
+    ///
+    /// Each task returns a `(hits, errorString?)` tuple so we can surface
+    /// the actual error message when a source fails AND we ended up with no
+    /// results to display. Without this, silent USDA errors (missing API
+    /// key, rate limit, network blip) would show as an empty list with no
+    /// explanation — bug fixed in the v2.2.1 first-cut after Mike hit it.
+    private func performRemoteSearch(query q: String, token: UUID) async {
+        async let usdaTask: ([USDAService.SearchHit], String?) = {
+            do {
+                let hits = try await USDAService.search(q, includeBranded: includeBranded)
+                return (hits, nil)
+            } catch is CancellationError {
+                // Cancelled by a new keystroke — suppress; the next fetch
+                // will overwrite the view state anyway.
+                return ([], nil)
+            } catch let e as USDAService.USDAError {
+                // Swallow HTTP 400 specifically: api.data.gov's fronting
+                // nginx occasionally returns 400 Bad Request on rapid /
+                // bursty requests even when our payload is valid. It's
+                // transient, server-side, and not actionable on our end.
+                // Show no results for USDA this round and let the user
+                // refine the query. ALL OTHER USDA errors (missing key,
+                // network failure, 401/403/429, decode error) still
+                // surface so real problems remain visible.
+                if case .http(400, _) = e {
+                    return ([], nil)
+                }
+                return ([], e.localizedDescription)
+            } catch {
+                return ([], error.localizedDescription)
             }
-        } catch {
-            await MainActor.run {
-                guard token == searchToken else { return }
-                usdaError = error.localizedDescription
-                isLoadingUSDA = false
+        }()
+        async let offTask: ([OpenFoodFactsService.SearchHit], String?) = {
+            // OFF gated by branded toggle. Skipped is NOT failed.
+            guard includeBranded else { return ([], nil) }
+            do {
+                let hits = try await OpenFoodFactsService.search(q)
+                return (hits, nil)
+            } catch is CancellationError {
+                return ([], nil)
+            } catch {
+                return ([], error.localizedDescription)
+            }
+        }()
+
+        let (usdaResult, offResult) = await (usdaTask, offTask)
+        let usdaHits = usdaResult.0
+        let usdaErr  = usdaResult.1
+        let offHits  = offResult.0
+        let offErr   = offResult.1
+
+        // If this whole search was cancelled (user typed another character),
+        // bail without touching the view state — a fresh debounce is already
+        // queued.
+        if Task.isCancelled { return }
+
+        let merged = mergeAndDedupe(usda: usdaHits, off: offHits, query: q)
+
+        await MainActor.run {
+            guard token == searchToken else { return }
+            remoteResults = merged
+            isLoadingRemote = false
+
+            // Surface errors only when the merged list is empty. If we have
+            // even partial coverage, suppress the error — a working list +
+            // a red wall is more confusing than the list alone.
+            if !merged.isEmpty {
+                remoteError = nil
+            } else if let e = usdaErr, let o = offErr {
+                remoteError = "USDA: \(e)\nOpen Food Facts: \(o)"
+            } else if let e = usdaErr {
+                remoteError = e
+            } else if let o = offErr {
+                remoteError = o
+            } else {
+                remoteError = nil
             }
         }
+    }
+
+    // MARK: - Merge + dedupe (v2.2.1)
+
+    /// Merges USDA + OFF results into one ranked list, dropping cross-source
+    /// and OFF-vs-OFF duplicates. The dedupe heuristic is intentionally
+    /// READABLE and TUNABLE — Mike will tweak when real-world results expose
+    /// the edges:
+    ///
+    ///   1. Score each result by relevance to the query (exact match >
+    ///      starts-with > word-boundary > contains > weak match).
+    ///   2. Sort merged, USDA wins ties (so USDA appears first when scores
+    ///      are equal).
+    ///   3. Walk the sorted list keeping a runner. A new candidate is
+    ///      considered a duplicate of an already-kept result when:
+    ///        • normalized names match (or one contains the other for >5
+    ///          chars), AND
+    ///        • normalized brands match, AND
+    ///        • caloriesPer100g are within ±15% of each other.
+    ///   4. On collision, the already-kept (earlier in sort order) result
+    ///      wins. Because USDA wins ties, USDA wins cross-source collisions.
+    ///
+    /// If the heuristic ever over-collapses (hides a real distinct food) or
+    /// under-collapses (lets a true duplicate through), TUNE THE THRESHOLDS
+    /// in `isLikelyDuplicate(_:_:)` — that's the knob.
+    private func mergeAndDedupe(
+        usda: [USDAService.SearchHit],
+        off: [OpenFoodFactsService.SearchHit],
+        query: String
+    ) -> [MergedHit] {
+        let q = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Build candidates with relevance scores.
+        struct Scored {
+            let hit: MergedHit
+            let score: Int
+        }
+        var scored: [Scored] = []
+        for h in usda {
+            let m = MergedHit(from: h)
+            scored.append(Scored(hit: m, score: relevanceScore(name: m.name, brand: m.brand, query: q)))
+        }
+        for h in off {
+            let m = MergedHit(from: h)
+            scored.append(Scored(hit: m, score: relevanceScore(name: m.name, brand: m.brand, query: q)))
+        }
+
+        // Sort: higher score first; on ties, USDA before OFF (preference
+        // baked into the source-tag enum's rawValue).
+        let sorted = scored.sorted { a, b in
+            if a.score != b.score { return a.score > b.score }
+            if a.hit.source != b.hit.source {
+                return a.hit.source == .usda
+            }
+            return false
+        }
+
+        // Dedupe walk.
+        var kept: [MergedHit] = []
+        for candidate in sorted {
+            let isDup = kept.contains { isLikelyDuplicate(candidate.hit, $0) }
+            if !isDup {
+                kept.append(candidate.hit)
+            }
+        }
+        return kept
+    }
+
+    /// Relevance scorer. Tweak weights if the order feels wrong in practice.
+    private func relevanceScore(name: String, brand: String?, query q: String) -> Int {
+        guard !q.isEmpty else { return 0 }
+        let nLower = name.lowercased()
+        let bLower = (brand ?? "").lowercased()
+        if nLower == q { return 1000 }
+        if nLower.hasPrefix(q) { return 850 }
+        // Word-boundary prefix (any whitespace-delimited word starts with q).
+        if nLower.split(separator: " ").contains(where: { $0.hasPrefix(q) }) {
+            return 700
+        }
+        if nLower.contains(q) { return 550 }
+        if !bLower.isEmpty && bLower.contains(q) { return 400 }
+        return 100
+    }
+
+    /// Heuristic duplicate check. See `mergeAndDedupe`'s doc-comment for the
+    /// rule and where to tune.
+    private func isLikelyDuplicate(_ a: MergedHit, _ b: MergedHit) -> Bool {
+        let nameA = normalizeForCompare(a.name)
+        let nameB = normalizeForCompare(b.name)
+        let brandA = normalizeForCompare(a.brand ?? "")
+        let brandB = normalizeForCompare(b.brand ?? "")
+
+        // Name match: identical, OR one contains the other when the shorter
+        // side is >5 chars (avoids "egg" matching "eggplant").
+        let nameMatch: Bool = {
+            if nameA == nameB { return true }
+            let shorter = nameA.count <= nameB.count ? nameA : nameB
+            let longer  = nameA.count <= nameB.count ? nameB : nameA
+            return shorter.count > 5 && longer.contains(shorter)
+        }()
+        guard nameMatch else { return false }
+
+        // Brand match: both empty (generic foods) OR identical.
+        let brandMatch = brandA == brandB
+        guard brandMatch else { return false }
+
+        // Calorie match: within ±15% tolerance.
+        let calA = a.caloriesPer100g
+        let calB = b.caloriesPer100g
+        guard calA > 0 || calB > 0 else { return true }   // both zero → call it a dup
+        let tolerance = max(calA, calB) * 0.15
+        return abs(calA - calB) <= tolerance
+    }
+
+    private func normalizeForCompare(_ s: String) -> String {
+        s.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     // MARK: - Picking a result
@@ -340,9 +565,9 @@ struct SearchSheet: View {
         pendingPick = Pick(prefill: LibraryService.toPrefill(food))
     }
 
-    private func pick(usda hit: USDAService.SearchHit) {
+    private func pick(merged hit: MergedHit) {
         Haptic.light()
-        pendingPick = Pick(prefill: hit.toPrefill())
+        pendingPick = Pick(prefill: hit.prefill)
     }
 
     // MARK: - Quick add (v1.7.3)
@@ -467,8 +692,50 @@ private struct LibraryRow: View {
     }
 }
 
-private struct USDARow: View {
-    let hit: USDAService.SearchHit
+// MARK: - MergedHit + MergedRow (v2.2.1)
+
+/// One-row-per-source-of-truth merger of USDA + OFF hits. Carries the
+/// prefill needed to land in Confirm. Identity is composite ("usda:<id>" /
+/// "off:<code>") so SwiftUI's ForEach can dedupe across re-renders cleanly.
+struct MergedHit: Identifiable, Hashable {
+    enum Source: String { case usda, off }
+
+    let id: String
+    let source: Source
+    let name: String
+    let brand: String?
+    let caloriesPer100g: Double
+    /// USDA's data type label (Foundation / SR Legacy / Survey / Branded);
+    /// nil for OFF, which has no equivalent classification.
+    let dataType: String?
+    let prefill: ConfirmFoodView.Prefill
+
+    init(from hit: USDAService.SearchHit) {
+        self.id = "usda:\(hit.id)"
+        self.source = .usda
+        self.name = hit.name
+        self.brand = hit.brand
+        self.caloriesPer100g = hit.caloriesPer100g
+        self.dataType = hit.dataType
+        self.prefill = hit.toPrefill()
+    }
+
+    init(from hit: OpenFoodFactsService.SearchHit) {
+        self.id = "off:\(hit.id)"
+        self.source = .off
+        self.name = hit.name
+        self.brand = hit.brand
+        self.caloriesPer100g = hit.caloriesPer100g
+        self.dataType = nil
+        self.prefill = hit.toPrefill()
+    }
+
+    static func == (lhs: MergedHit, rhs: MergedHit) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+private struct MergedRow: View {
+    let hit: MergedHit
     let action: () -> Void
 
     var body: some View {
@@ -479,12 +746,23 @@ private struct USDARow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                     HStack(spacing: 6) {
-                        Text(hit.dataType)
+                        // Source tag — small, unobtrusive, always present.
+                        Text(sourceLabel)
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(typeColor.opacity(0.15))
+                            .background(sourceColor.opacity(0.15))
                             .clipShape(Capsule())
-                            .foregroundStyle(typeColor)
+                            .foregroundStyle(sourceColor)
+                        // USDA dataType pill stays so you can distinguish
+                        // Foundation/SR/Survey vs Branded at a glance.
+                        if let dataType = hit.dataType, !dataType.isEmpty {
+                            Text(dataType)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(usdaTypeColor.opacity(0.15))
+                                .clipShape(Capsule())
+                                .foregroundStyle(usdaTypeColor)
+                        }
                         if let brand = hit.brand, !brand.isEmpty {
                             Text(brand).foregroundStyle(.secondary)
                         }
@@ -502,7 +780,25 @@ private struct USDARow: View {
         .buttonStyle(.plain)
     }
 
-    private var typeColor: Color {
+    /// "USDA" / "OFF" — visible at a glance so lab-analyzed vs crowd-sourced
+    /// data is never ambiguous.
+    private var sourceLabel: String {
+        switch hit.source {
+        case .usda: return "USDA"
+        case .off:  return "OFF"
+        }
+    }
+
+    /// USDA = green (lab-quality). OFF = amber (crowd-sourced — handle with
+    /// slightly more skepticism).
+    private var sourceColor: Color {
+        switch hit.source {
+        case .usda: return .green
+        case .off:  return .orange
+        }
+    }
+
+    private var usdaTypeColor: Color {
         switch hit.dataType {
         case "Foundation":     return .green
         case "SR Legacy":      return .blue

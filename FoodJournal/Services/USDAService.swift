@@ -13,16 +13,18 @@ enum USDAService {
         case missingKey
         case invalidURL
         case network(String)
-        case http(Int)
+        case http(Int, String)    // status code + response body (api.data.gov returns a JSON message with details)
         case decode(String)
 
         var errorDescription: String? {
             switch self {
-            case .missingKey:    return "USDA API key not set. Add one in Settings → USDA API key."
-            case .invalidURL:    return "Couldn't construct the search URL."
-            case .network(let m): return "Network error: \(m)"
-            case .http(let code): return "USDA returned HTTP \(code)."
-            case .decode(let m): return "Couldn't read USDA response: \(m)"
+            case .missingKey:        return "USDA API key not set. Add one in Settings → USDA API key."
+            case .invalidURL:        return "Couldn't construct the search URL."
+            case .network(let m):    return "Network error: \(m)"
+            case .http(let code, let body):
+                let preview = String(body.prefix(300))
+                return "USDA HTTP \(code). \(preview)"
+            case .decode(let m):     return "Couldn't read USDA response: \(m)"
             }
         }
     }
@@ -66,7 +68,11 @@ enum USDAService {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
-        let key = KeychainStore.load(.usda)
+        // Trim defensively — pasting from email sometimes carries trailing
+        // whitespace or a newline that URLQueryItem then percent-encodes
+        // into the api_key value, turning a valid key into a malformed one
+        // (and api.data.gov returns 400, not a clear "bad key" message).
+        let key = KeychainStore.load(.usda).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { throw USDAError.missingKey }
 
         var components = URLComponents(string: "https://api.nal.usda.gov/fdc/v1/foods/search")
@@ -103,7 +109,12 @@ enum USDAService {
                 }
 
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    throw USDAError.http(http.statusCode)
+                    // api.data.gov returns a JSON message in the response
+                    // body explaining what was wrong (invalid key, bad
+                    // parameter, etc.). Surface it via the error so the
+                    // user can see the actual cause in the search sheet.
+                    let bodyText = String(data: data, encoding: .utf8) ?? "<no body>"
+                    throw USDAError.http(http.statusCode, bodyText)
                 }
 
         let decoded: SearchResponse
