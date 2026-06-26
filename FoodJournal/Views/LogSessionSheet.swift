@@ -149,8 +149,23 @@ struct LogSessionSheet: View {
             .onChange(of: selectedRoutineID) { _, newID in
                 seedFromRoutine(id: newID)
             }
+            // v2.1b — Pre-select today's scheduled routine if one exists.
+            // Only runs on first appear (hasSeededFromRoutine guards against
+            // re-seeding if the user has already touched the picker).
+            .onAppear {
+                guard !hasSeededFromRoutine, selectedRoutineID == nil else { return }
+                let map = StrengthSchedule.decode(scheduleJSON)
+                let weekday = StrengthSchedule.weekday(for: .now)
+                guard let id = map[weekday],
+                      routines.contains(where: { $0.routineID == id }) else { return }
+                selectedRoutineID = id
+                // .onChange triggers seedFromRoutine which sets the flag.
+            }
         }
     }
+
+    // v2.1b — read-only access to the schedule JSON for pre-select.
+    @AppStorage(StrengthSchedule.storageKey) private var scheduleJSON: String = "{}"
 
     /// Pre-fill exercises from a routine's RoutineExercises. Wipes any
     /// existing drafts — picking a routine resets the session, which is the

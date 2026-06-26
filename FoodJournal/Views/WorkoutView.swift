@@ -39,6 +39,16 @@ struct WorkoutView: View {
     @State private var showingRoutines = false
     @State private var showingLogSession = false
     @State private var showingHistory = false
+    // v2.1b — Schedule + Trends entry points.
+    @State private var showingSchedule = false
+    @State private var showingStrengthTrends = false
+
+    // v2.1b — read-only mirror of the schedule JSON for the "Today: …" hint.
+    // ScheduleSheet writes through the same @AppStorage key.
+    @Query(sort: [SortDescriptor(\StrengthRoutine.order),
+                  SortDescriptor(\StrengthRoutine.createdAt)])
+    private var allRoutines: [StrengthRoutine]
+    @AppStorage(StrengthSchedule.storageKey) private var scheduleJSON: String = "{}"
 
     var body: some View {
         NavigationStack {
@@ -77,6 +87,12 @@ struct WorkoutView: View {
             }
             .sheet(isPresented: $showingHistory) {
                 SessionHistorySheet()
+            }
+            .sheet(isPresented: $showingSchedule) {
+                ScheduleSheet()
+            }
+            .sheet(isPresented: $showingStrengthTrends) {
+                StrengthTrendsSheet()
             }
         }
     }
@@ -433,22 +449,46 @@ struct WorkoutView: View {
         }
     }
 
-    // MARK: - Strength section (v2.1a)
+    // MARK: - Strength section (v2.1a, extended v2.1b)
 
     private var activeSessions: [StrengthSession] {
         allStrengthSessions.filter { $0.pendingDeleteAt == nil }
+    }
+
+    /// v2.1b — Resolve today's scheduled routine. Returns nil for Rest OR
+    /// for a dangling (deleted-routine) UUID so the UI never shows a
+    /// stale name.
+    private var todaysScheduledRoutine: StrengthRoutine? {
+        let map = StrengthSchedule.decode(scheduleJSON)
+        let weekday = StrengthSchedule.weekday(for: .now)
+        guard let id = map[weekday] else { return nil }
+        return allRoutines.first(where: { $0.routineID == id })
+    }
+
+    private var todayLabel: String {
+        todaysScheduledRoutine?.name ?? "Rest"
     }
 
     private var strengthSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader("Strength")
             VStack(spacing: 0) {
+                todayIndicatorRow
+                Divider().padding(.leading, 48)
                 strengthRow(
                     label: "Routines",
                     symbol: "list.bullet.rectangle.portrait",
                     color: .orange
                 ) {
                     showingRoutines = true
+                }
+                Divider().padding(.leading, 48)
+                strengthRow(
+                    label: "Schedule",
+                    symbol: "calendar",
+                    color: .purple
+                ) {
+                    showingSchedule = true
                 }
                 Divider().padding(.leading, 48)
                 strengthRow(
@@ -467,10 +507,40 @@ struct WorkoutView: View {
                 ) {
                     showingHistory = true
                 }
+                Divider().padding(.leading, 48)
+                strengthRow(
+                    label: "Trends",
+                    symbol: "chart.line.uptrend.xyaxis",
+                    color: .green
+                ) {
+                    showingStrengthTrends = true
+                }
             }
             .background(Color(.secondarySystemGroupedBackground),
                         in: RoundedRectangle(cornerRadius: 16))
         }
+    }
+
+    /// Non-button hint at the top of the Strength card showing the schedule's
+    /// pick for today (or Rest). Distinct from `strengthRow` so it doesn't
+    /// look tappable.
+    private var todayIndicatorRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 32)
+            Text("Today")
+                .font(.body)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(todayLabel)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(todaysScheduledRoutine == nil ? .secondary : .primary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 
     private func strengthRow(
