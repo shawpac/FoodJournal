@@ -1,10 +1,29 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.1a.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.1b. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.1b — Weekly strength schedule + per-exercise trends
+
+**Closes out the v2.1 strength feature set. Schedule tells you what to do today; trends show whether the work is paying off. Schema-clean — built entirely on the v2.1a model layer.**
+
+- ✅ New `Schedule` entry point in the Workouts tab's Strength section. 7-row sheet (Mon → Sun display order; storage uses Calendar.weekday 1=Sun…7=Sat). Each row is a menu Picker over the current routines + Rest.
+- ✅ Non-tappable "Today: {routine name or Rest}" indicator at the top of the Strength section card reflects the current weekday's pick. Updates instantly via `@AppStorage`.
+- ✅ `Log a session` pre-selects today's scheduled routine on `onAppear` when one resolves — manual override still works.
+- ✅ **Robustness**: if a stored routine UUID no longer resolves (the user deleted that routine), the day silently falls back to Rest. No crash, no dangling name surfaced. The Binding's getter handles the unresolved case.
+- ✅ Storage: single `@AppStorage("strengthWeeklySchedule")` JSON string encoding a `[weekday-int-as-string: routineID-uuid-string]` map. New `Services/StrengthSchedule.swift` holds the pure encode/decode/setting/weekday helpers; resolution to a SwiftData `StrengthRoutine` happens at view time.
+- ✅ New `Trends` entry point in the Strength section → `StrengthTrendsSheet`. Pick an exercise from a menu of every distinct name across all your non-soft-deleted sessions (case-insensitive dedupe, latest casing).
+- ✅ Two per-session metrics, computed **independently** (the top-weight set and the top-e1RM set in the same session may be different sets):
+  - **Top-set weight**: max non-nil `weightLbs` across the exercise's sets in that session.
+  - **Estimated 1RM** via Epley `weight × (1 + reps/30)`, max over sets with BOTH non-nil weight AND non-nil reps. Always labeled "Est." / "(Epley)" — never bare 1RM.
+- ✅ Two line+point charts (Swift Charts, iOS 16+, project targets iOS 18+). Drawn only when ≥ 2 sessions exist; a single session shows the data point with a "Need 2+ sessions to show a trend." caption — no fake line.
+- ✅ Latest-vs-prior delta rows (green ↑ when up, orange ↓ when down, "–" when no prior session).
+- ✅ Raw sets per session listed below the charts so the actual logged data is never hidden behind the estimate. Sets with nil weight or reps surface raw (`135 × –`) but are excluded from the trend math.
+- ✅ Strength section grew to 6 items: Today indicator → Routines → Schedule → Log a session → History → Trends.
+- ✅ Schema-clean. No new @Model, no FoodJournalApp.swift change.
 
 ### v2.1a.1 — Apple Fitness split into inline-today + history page
 
@@ -227,7 +246,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.1a. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health read loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a adds the first non-food fitness logging surface (daily reps tracker + strength routines/sessions/history). The daily-driver loop is genuinely tight:
+The app is in a great place at v2.1b. **The v2.1 strength feature set is fully done** — routines, schedule, logging, history, and per-exercise trends. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health read loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.
@@ -235,12 +254,10 @@ The app is in a great place at v2.1a. Tier 1 + Tier 2 (minus iCloud) are fully s
 - Apple Health mirrors food/water/weight TO Health and reads workouts + energy FROM Health; reminders nudge from outside the app.
 - Reinstalls are no longer lossy — export then import.
 - Strength + daily reps + stretch tracking are logged and persisted (verified across force-quit and a full reinstall round-trip).
+- Strength routines have a weekly schedule that drives a Today indicator and pre-selects the right routine when you log a session.
+- Per-exercise trends show top weight + est. 1RM with honest empty/sparse states and raw-sets disclosure.
 
-**v2.1b is what's next** (schema-clean now that v2.1a defined the full strength schema upfront):
-- **Day-of-week schedule editor.** UI for "Mon/Wed/Fri = Push day A, Tue/Thu = Pull day A" — surfaces a routine suggestion on the Workouts tab matching today's weekday.
-- **Strength trends.** A new section in TrendsView aggregating LoggedSet weight/reps over time per exercise (or per routine). 1RM estimates / per-exercise progression charts / volume-per-week aggregates — pick whichever surfaces the actual question Mike wants to answer once he has a few weeks of session data.
-
-Beyond v2.1:
+What's left is all Tier 3 — nothing blocking the daily-driver loop. Pick when motivated:
 
 1. **Recipe support** — single new `@Model` for a saved meal of multiple FoodEntry rows. Bundle with the next schema window if more items accumulate.
 
@@ -249,3 +266,7 @@ Beyond v2.1:
 3. **UI polish** — tinted app icon variant for iOS appearance modes, animated number transitions, dark-mode tuning.
 
 4. **CloudKit + App Store** — gated on the $99 decision. Still deferred.
+
+Possible v2.1c-style follow-ups if real usage exposes a gap (not committed):
+- **Per-session total volume trends** (sum of weight × reps) — was intentionally left out of v2.1b; cheap to add if Mike wants the third metric alongside top-set + e1RM.
+- **Strength workout writes to Apple Health** — currently OFF by design (Watch already captures calories, double-counting risk). Could revisit if a strength-specific HK schema becomes meaningful.

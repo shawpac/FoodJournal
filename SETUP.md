@@ -4,7 +4,7 @@ A personal iOS nutrition + fitness tracker. Display name on the home screen is *
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.1a.1)
+## Current state (v2.1b)
 
 **Working features**
 
@@ -123,6 +123,24 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
   - **History** → reverse-chrono list of past StrengthSessions with date, routine name, exercise + set counts, and duration. Tap → read-only SessionDetailView showing each exercise and its sets. Swipe-delete with 5-second undo at the list level (cascade-deletes the session's exercises and sets atomically).
 - **Strength + daily-tracker data is intentionally in-app only.** No HealthKit fields, no HealthSync calls. HealthKit can't store weight/reps/sets, and writing strength workouts from the app would double-count against the Apple Watch's already-tracked calorie burn (which appears in the Today energy strip and Trends). The session's duration field is informational only.
 
+*Strength schedule (v2.1b)*
+- New **Schedule** entry point in the Workouts tab → Strength section. Sheet with 7 weekday rows (Monday → Sunday), each a Picker over current routines + Rest. Pick one routine per day or leave Rest.
+- A non-tappable **"Today: {routine name or Rest}"** indicator at the top of the Strength section reflects the current weekday's pick. Updates instantly when the schedule changes.
+- **Log a session** pre-selects today's scheduled routine when opened (which auto-fills the routine's exercises). Manual picker override still works.
+- Storage is a single `@AppStorage("strengthWeeklySchedule")` JSON string mapping weekday number → routineID UUID. No schema change, no new @Model.
+- **Robustness**: if a stored routine UUID no longer resolves (the user deleted that routine), the day silently falls back to Rest — no crash, no dangling name surfaced.
+
+*Strength trends (v2.1b)*
+- New **Trends** entry point in the Workouts tab → Strength section (separate from the food-oriented Trends tab — strength trends live with strength logging).
+- Pick an exercise from a menu of every distinct name across all your non-soft-deleted sessions (case-insensitive dedupe, displayed in the latest casing you used).
+- **Per-session top-set weight**: max `weightLbs` across that exercise's sets in that session (sets with nil weight are excluded). Answers "is the weight going up."
+- **Per-session estimated 1RM** via Epley `weight × (1 + reps/30)`, taking the max over sets with BOTH non-nil weight AND non-nil reps. Always labeled "Est." / "(Epley)" — never presented as a lifted weight. Normalizes across rep ranges so 135×8 and 145×3 are comparable.
+- The two stats are **computed independently** per session — the top-weight set and the top-e1RM set within one session may be different sets.
+- **Two line+point charts** (Swift Charts) for the two metrics. Drawn only when there are ≥ 2 sessions; a single session shows its data point with a "Need 2+ sessions to show a trend." caption and no fake line.
+- **Latest vs previous delta** rows at the top: green ↑ when the metric went up, orange ↓ when it went down, "–" when no prior session exists for that exercise.
+- **Raw sets per session** listed below the charts so the actual logged data is never hidden behind the estimate. Sets with nil weight or reps display raw (`135 × –`) but are excluded from the trend math.
+- Empty state when no logged sessions exist anywhere.
+
 *CSV import (v2.0.1)*
 - New row in Settings → Data → **Import data** opens a sheet that supports `.fileImporter` for picking any subset of food/water/weight CSVs (renamed files are fine — header is sniffed, not the filename).
 - **Empty-table guard per type:** food/water/weight each require their table to be empty (no non-soft-deleted rows) before that file's import will run. If non-empty, the file is reported as skipped with an orange message and zero rows insert. There is intentionally no dedupe / merge / matching logic.
@@ -207,7 +225,10 @@ FoodJournal/
 │   ├── NotificationService.swift       v1.8.1: daily meal reminder schedule/cancel
 │   ├── NotificationCoordinator.swift   v1.8.1: @Observable UN delegate
 │   ├── HealthService.swift             v1.8.2: HealthService + HealthSync orchestration
-│   └── UsualSuggestionService.swift    v1.8.6: "your usual?" suggestion logic
+│   ├── UsualSuggestionService.swift    v1.8.6: "your usual?" suggestion logic
+│   └── StrengthSchedule.swift          v2.1b: AppStorage-backed weekday → routineID
+│                                        JSON map. Decode/encode helpers; resolution
+│                                        to SwiftData is the view's job.
 └── Views/
     ├── RootView.swift                  TabView (5 tabs: Today/Add/Trends/Workouts/
     │                                    Settings), hoisted selectedDate, deep-link
@@ -217,13 +238,14 @@ FoodJournal/
     ├── AddFoodView.swift               date-aware add tab, past-day banner
     ├── TrendsView.swift                Weight section (always-visible), Distribution
     │                                    by meal section, WeightEntriesSheet
-    ├── WorkoutView.swift               v2.0 + v2.1a + v2.1a.1: Workouts tab. Today
-    │                                    summary + Apple Fitness (today inline only,
-    │                                    "See previous workouts ›" pushes the rest)
-    │                                    + Daily section (pushup/situp append cards +
-    │                                    stretch toggle) + Strength section (nav rows
-    │                                    opening Routines / Log session / History
-    │                                    sheets). Composable sections.
+    ├── WorkoutView.swift               v2.0 + v2.1a / v2.1a.1 / v2.1b: Workouts tab.
+    │                                    Today summary + Apple Fitness (today inline
+    │                                    only, "See previous workouts ›" pushes the
+    │                                    rest) + Daily section (pushup/situp append
+    │                                    cards + stretch toggle) + Strength section
+    │                                    with 6 items (Today indicator → Routines →
+    │                                    Schedule → Log session → History → Trends).
+    │                                    Composable sections.
     ├── WorkoutHistoryView.swift        v2.1a.1: full-page Apple Fitness history pushed
     │                                    from Workouts tab. Receives pre-filtered
     │                                    previous-workouts array, no new HK query.
@@ -235,6 +257,12 @@ FoodJournal/
     │                                    (or blank). Targets are display-only hints.
     ├── SessionHistorySheet.swift       v2.1a: reverse-chrono history + read-only detail.
     │                                    Cascade-safe soft-delete with 5s undo.
+    ├── ScheduleSheet.swift             v2.1b: 7 weekday rows (Mon→Sun display),
+    │                                    routine-picker per day, dangling-ID fallback
+    │                                    to Rest.
+    ├── StrengthTrendsSheet.swift       v2.1b: per-exercise charts. Top-set weight +
+    │                                    est. 1RM (Epley), computed independently per
+    │                                    session. Swift Charts. Raw sets disclosure.
     ├── BarcodeScannerSheet.swift       defaultMeal + defaultDate
     ├── PhotoLogSheet.swift             v1.8.5: multi-photo strip, low-confidence card
     ├── SearchSheet.swift               library swipe-add with Health-sync wiring
@@ -268,7 +296,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), **v2.1a.1 (Apple Fitness split — view-only)** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), **v2.1b (strength schedule + per-exercise trends — view + AppStorage only)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 
