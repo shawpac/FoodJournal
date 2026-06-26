@@ -145,30 +145,76 @@ struct WorkoutView: View {
     }
 
     // MARK: - Apple Fitness section
+    //
+    // v2.1a follow-up — keep the Workouts tab short by showing ONLY today's
+    // Apple Fitness workouts inline. A "See previous workouts ›" row pushes
+    // the full 30-day history (excluding today) to WorkoutHistoryView.
+
+    /// All Apple Fitness workouts from the lookback window EXCLUDING today.
+    private var previousWorkouts: [HealthService.WorkoutSummary] {
+        let cal = Calendar.current
+        return workouts.filter { !cal.isDateInToday($0.startDate) }
+    }
 
     private var appleFitnessSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader("Apple Fitness")
             if workouts.isEmpty {
+                // Nothing at all in the lookback — keep the original CTA.
                 emptyStateCard
             } else {
-                VStack(spacing: 16) {
-                    ForEach(groupedWorkouts, id: \.day) { group in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(dayHeader(group.day))
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.leading, 4)
-                            VStack(spacing: 8) {
-                                ForEach(group.items) { w in
-                                    workoutRow(w)
-                                }
-                            }
+                VStack(spacing: 8) {
+                    if todayWorkouts.isEmpty {
+                        nothingTodayCard
+                    } else {
+                        ForEach(todayWorkouts) { w in
+                            workoutRow(w)
                         }
+                    }
+                    if !previousWorkouts.isEmpty {
+                        NavigationLink {
+                            WorkoutHistoryView(workouts: previousWorkouts)
+                        } label: {
+                            HStack {
+                                Text("See previous workouts")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.primary)
+                                Spacer()
+                                Text("\(previousWorkouts.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                Image(systemName: "chevron.right")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .padding(14)
+                            .background(Color(.secondarySystemGroupedBackground),
+                                        in: RoundedRectangle(cornerRadius: 14))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
+    }
+
+    /// Inline placeholder for when today is empty but earlier days have data.
+    /// Distinct from the full emptyStateCard so the user sees today's gap at
+    /// a glance without losing the previous-workouts entry point underneath.
+    private var nothingTodayCard: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "figure.run")
+                .font(.title3)
+                .foregroundStyle(.orange.opacity(0.6))
+                .frame(width: 32)
+            Text("No workouts logged today.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
     }
 
     private var emptyStateCard: some View {
@@ -221,30 +267,6 @@ struct WorkoutView: View {
         .padding(14)
         .background(Color(.secondarySystemGroupedBackground),
                     in: RoundedRectangle(cornerRadius: 14))
-    }
-
-    // MARK: - Grouping
-
-    private struct DayGroup {
-        let day: Date
-        let items: [HealthService.WorkoutSummary]
-    }
-
-    private var groupedWorkouts: [DayGroup] {
-        let cal = Calendar.current
-        let dict = Dictionary(grouping: workouts) { cal.startOfDay(for: $0.startDate) }
-        return dict.keys.sorted(by: >).map { day in
-            DayGroup(day: day, items: (dict[day] ?? []).sorted { $0.startDate > $1.startDate })
-        }
-    }
-
-    private func dayHeader(_ date: Date) -> String {
-        let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Today" }
-        if cal.isDateInYesterday(date) { return "Yesterday" }
-        let f = DateFormatter()
-        f.dateFormat = "EEE, MMM d"
-        return f.string(from: date)
     }
 
     // MARK: - Formatters
