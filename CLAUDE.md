@@ -1,6 +1,6 @@
 # FoodJournal — Project Context
 
-A personal iOS nutrition + fitness tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote auto-push, no collaborators. Personal use only — not on App Store. Currently v2.2.
+A personal iOS nutrition + fitness tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote auto-push, no collaborators. Personal use only — not on App Store. Currently v2.2.1.
 
 **Display name vs internal name:** the app shows as **"MS Fitness"** on the home screen (set via `INFOPLIST_KEY_CFBundleDisplayName` in `project.pbxproj` as of v2.0). The bundle ID (`com.shawbler.FoodJournal`), Xcode project name (`FoodJournal.xcodeproj`), repo, and all source identifiers remain "FoodJournal" — do NOT rename them. Changing the bundle ID would orphan the user's existing SwiftData store.
 
@@ -46,7 +46,7 @@ Schema changes (any new fields on `@Model` classes) require app reinstall on dev
 2. User long-presses app icon on phone → Remove App → Delete App.
 3. User runs from Xcode (⌘R) for fresh install.
 
-Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry), **v2.1a (7 new @Models: ExerciseRepEntry, StretchDay, StrengthRoutine, RoutineExercise, StrengthSession, LoggedExercise, LoggedSet — first @Relationship cascades in the schema)**. v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only reorganization), v2.1b (weekly strength schedule + per-exercise trends — view + AppStorage only), **v2.2 (Health Data tab + 5-tab bar reorg — view + HealthKit reads only)** were schema-clean — no reinstall.
+Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry), **v2.1a (7 new @Models: ExerciseRepEntry, StretchDay, StrengthRoutine, RoutineExercise, StrengthSession, LoggedExercise, LoggedSet — first @Relationship cascades in the schema)**. v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only reorganization), v2.1b (weekly strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + 5-tab bar reorg — view + HealthKit reads only), **v2.2.1 (Open Food Facts text search + merge/dedupe/source tags — view + service only)** were schema-clean — no reinstall.
 
 ## Hard rules
 
@@ -118,6 +118,12 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **Tab bar holds exactly 5 tabs (v2.2 reorg).** Order: **Food (tag 0) · Workouts (1) · Health Data (2) · Trends (3) · Settings (4)**. iOS overflows to a "More" tab beyond 5 — DO NOT add a 6th without consolidating. The `Add` tab was removed in v2.2 (the user adds food via meal cards on the Food tab, not via a dedicated tab). The notification deep-link still targets `selectedTab = 0` (= Food = TodayView). `AddFoodView.swift` is left in the project but unreferenced — safe to delete in a later cleanup.
 
+- **Food search has two remote sources, queried concurrently (v2.2.1).** USDA FoodData Central (lab-quality, requires personal API key) and Open Food Facts (crowd-sourced, no key, denser branded coverage). Both run in parallel from the same 300ms debounce in `SearchSheet.performRemoteSearch`. One failing source does NOT block the other — partial coverage beats no coverage. Results merge into ONE ranked list with per-row source tags (`USDA` green / `OFF` orange). Cross-source dedupe collapses near-duplicates on name + brand + ±15% calorie tolerance, PREFERRING USDA on collisions. The dedupe heuristic + relevance scorer are intentionally readable and tunable — see `mergeAndDedupe(_:_:query:)` in SearchSheet.
+
+- **Branded toggle gates OFF AND USDA Branded (v2.2.1).** OFF's catalog is overwhelmingly branded; querying it for `includeBranded=false` would clutter the generic-food experience. Off → USDA generic only (Foundation / SR Legacy / Survey). On → USDA generic + USDA Branded + all OFF results. The toggle's footer text in SearchSheet documents this.
+
+- **SearchSheet cancels its in-flight remote fetch on every keystroke (v2.2.1).** The Task reference lives in `@State remoteFetchTask`. Cancellation propagates through Swift structured concurrency to the URLSession data tasks inside. This prevents rapid typing from piling concurrent HTTPS requests onto the same HTTP/2 connection — a real fix for the api.data.gov nginx-400 symptom that appeared with v2.2.1's two-source concurrency. `CancellationError` is suppressed inside the per-source closures so cancelled fetches don't surface as user-facing errors.
+
 ## Recurring pitfalls (do not re-make these mistakes)
 
 - **HealthKit: do NOT include `HKCorrelationType(.food)` in `requestAuthorization`'s `toShare:` set.** It crashes with `NSInvalidArgumentException: Authorization to share the following types is disallowed: HKCorrelationTypeIdentifierFood`. Confirmed during v1.8.2 development. Only request quantity types.
@@ -150,13 +156,19 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **HealthKit read-denial is NOT detectable (v1.9 pitfall, reinforced in v2.2).** A denied read type returns no samples — identical to "no data exists." A permanently `–` tile in HealthMetricsView could be either, and the app cannot tell the user which. Do not try to invent denial detection; surface the ambiguity honestly (the v2.2 dashboard footer says so explicitly).
 
+- **USDA HTTP 400 is silently swallowed in the search path (v2.2.1).** api.data.gov's fronting nginx returns 400 Bad Request on certain rapid / bursty request patterns — server-side quirk, not actionable from the client. `SearchSheet.performRemoteSearch` catches `USDAError.http(400, _)` specifically and returns empty USDA results without an error message. **Every other USDA error still surfaces** (missing key, network failure, 401/403/429, decode error) so real problems remain visible. The body of any USDA non-200 response is included in `USDAError.http(_, body)` so when a real error DOES fire, the cause is visible in the UI's error text, not just the status code.
+
+- **OFF text-search is partial-data-by-design (v2.2.1).** Open Food Facts is crowd-sourced and frequently missing optional nutrients — `OpenFoodFactsService.search(_:)` SKIPS products with no name, no nutriments block, or no calorie info (un-loggable junk), but partial products (calories + macros only, every other nutrient nil) ARE included. Nil ≠ 0 is enforced more aggressively here than in USDA: every optional `Double?` nutrient stays nil if OFF doesn't provide it. Do not refactor any OFF parsing path to default missing optionals to 0 — that would silently corrupt the trends layer with fake-zero data points.
+
 ## File map (where to look)
 
 - `FoodJournalApp.swift` — entry point, SwiftData container with **14 model types** (7 originals + 7 v2.1a strength/daily), owns NotificationCoordinator + registers as UN delegate.
 - `Models/Models.swift` — all `@Model` classes: originals (FoodEntry, UserGoals, CachedFood, WaterEntry, CachedPhotoEstimate, LibraryFood, WeightEntry) + v2.1a strength/daily (ExerciseRepEntry, StretchDay, StrengthRoutine, RoutineExercise, StrengthSession, LoggedExercise, LoggedSet — with @Relationship cascades + inverses). Plus `LibraryFoodUpsert` helper + `FoodFormat` enum.
 - `Services/`
   - `MealTimeHelper.swift` — meal-window config (UserDefaults-backed, configurable in Settings since v1.8); late-night warning logic.
-  - `LibraryService.swift`, `USDAService.swift`, `OpenFoodFactsService.swift` — search + product lookup.
+  - `LibraryService.swift` — local library substring search + recency scoring.
+  - `USDAService.swift` — USDA FoodData Central text-search (requires personal API key). `USDAError.http(code, body)` carries the response body so api.data.gov's actual complaint is visible in UI errors (v2.2.1).
+  - `OpenFoodFactsService.swift` — barcode lookup (v1.5) + text-search (v2.2.1). Search returns `SearchHit` rows matching USDA's normalized shape; partial products with missing optional nutrients are KEPT (nil stays nil), un-loggable products with no name / no nutriments / no calorie info are SKIPPED.
   - `ClaudeVisionService.swift` — photo → nutrition estimate; supports multi-image (v1.8.5).
   - `KeychainStore.swift` — parameterized key storage (anthropic + usda).
   - `NotificationService.swift` (v1.8.1) — daily meal reminder scheduling.
@@ -179,7 +191,7 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 - `Views/TodayView.swift` — date-navigable dashboard. Hosts WaterEntriesSheet (nested) + MealDetailSheet (nested). Smart-suggestion banner (v1.8.6) sits above the daily totals card. v1.9 energy strip (Consumed / Burned / Net / Active) sits between daily totals and water, gated by `showCaloriesBurnedFromHealth`. Meal cards show P/C/F line below calories (v1.8.4). EntryRow recognizes `source == "suggestion"` for sparkles icon. `StatTile.progress` is `Double?`; nil hides the bar (used by Consumed/Burned/Active).
 - `Views/AddFoodView.swift` — date-aware add tab + past-day banner + MostUsedSheet (nested).
 - `Views/TrendsView.swift` — range picker, per-section averages, Weight section (always visible since v1.8), v1.9 Energy section (Avg Active / Avg Total Burned / Avg Net) shown when `showCaloriesBurnedFromHealth` is on (parallel to Weight, outside the food-data gate), Distribution by meal section (v1.8.4), nested WeightEntriesSheet for log/manage.
-- `Views/SearchSheet.swift` — library + USDA search + library swipe-add (v1.7.3) with HealthSync wiring (v1.8.2).
+- `Views/SearchSheet.swift` — library + **USDA + Open Food Facts (v2.2.1)** unified search. Library swipe-add (v1.7.3) with HealthSync wiring (v1.8.2). USDA + OFF queried concurrently from one debounce; merged + deduped + source-tagged via the `MergedHit` struct. In-flight task cancellation on each keystroke prevents api.data.gov nginx-400 from rapid bursts.
 - `Views/NutritionBreakdownSheet.swift` — full 19-nutrient breakdown by selectedDate.
 - `Views/BarcodeScannerSheet.swift`, `Views/PhotoLogSheet.swift` — scanner + photo log. PhotoLogSheet was rewritten in v1.8.5 around `images: [UIImage]` for multi-photo.
 - `Views/CSVExportSheet.swift` — exports food/water/weight CSVs (v1.8.2 added weight; v1.9 adds energy.csv when `showCaloriesBurnedFromHealth` is on — per-day active/basal/total/consumed/net columns, nil → empty cell).

@@ -1,10 +1,25 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.2.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.2.1 — Open Food Facts text search alongside USDA (merged, deduped, source-tagged)
+
+**Fixes USDA's thin branded/packaged coverage by adding OFF as a second text-search source. USDA stays — this ADDS a source, doesn't replace one.**
+
+- ✅ New `OpenFoodFactsService.SearchHit` + `search(_:)` text-search method using OFF's classic search endpoint. No API key. Returns up to ~25 usable products; malformed entries (no name / no nutriments / no calorie info) are SKIPPED rather than included with fake zeros.
+- ✅ Nutrient parsing mirrors the existing barcode-path conversions exactly: macros in g; minerals (sodium / potassium / cholesterol / calcium / iron / magnesium) in mg; vitamins A & D in µg; vitamin C in mg. Salt → sodium fallback preserved.
+- ✅ SearchSheet now fires USDA + OFF **concurrently** behind a single 300ms debounce. One failing source does NOT block the other — partial coverage beats no coverage.
+- ✅ Results merge into ONE ranked list with per-row source tags (`USDA` green / `OFF` orange). Cross-source dedupe collapses near-duplicates on name + brand + ±15% calorie tolerance, **preferring USDA on collisions** (lab-quality data wins over crowd-sourced).
+- ✅ Relevance scorer + dedupe heuristic are intentionally readable and tunable. The first-pass thresholds may over- or under-collapse on some queries; comments document where to adjust.
+- ✅ "Include branded foods" toggle now gates USDA Branded AND all OFF results (OFF is overwhelmingly branded). Off → USDA generic only. On → USDA generic + USDA Branded + OFF.
+- ✅ In-flight remote-fetch task is explicitly cancelled on each keystroke (`@State remoteFetchTask`). Prevents rapid typing from piling concurrent HTTPS requests onto the same HTTP/2 connection — fixes a nginx-400 symptom that appeared when two-source concurrency stressed api.data.gov's load balancer.
+- ✅ USDA HTTP 400 is silently swallowed (server-side quirk, not actionable). Every other USDA error (missing key, 401/403/429, network failure, decode) still surfaces with the actual cause text from api.data.gov's response body — `USDAError.http(code, body)` now carries the body so the UI's error text is informative.
+- ✅ Defensive whitespace trim on the USDA API key inside `USDAService.search` so a stray trailing newline pasted from email no longer triggers a 403.
+- ✅ Schema-clean. View + service changes only.
 
 ### v2.2 — Health Data tab (read-only Apple Health metrics) + tab bar reorg
 
@@ -260,7 +275,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.2. **The v2.1 strength feature set is fully done** and **v2.2 closes the read-side Apple Health loop with the new Health Data tab.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs. The daily-driver loop is genuinely tight:
+The app is in a great place at v2.2.1. **The v2.1 strength feature set is fully done**, **v2.2 closed the read-side Apple Health loop**, and **v2.2.1 fixed USDA's thin packaged-food coverage by adding Open Food Facts as a second text-search source.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs; v2.2.1 added OFF text search with merge + dedupe + source tags. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.

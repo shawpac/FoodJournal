@@ -1,12 +1,12 @@
 # FoodJournal (display name: "MS Fitness")
 
-A personal iOS nutrition + fitness tracker. Display name on the home screen is **"MS Fitness"** as of v2.0; bundle ID, Xcode project name, and repo all still say "FoodJournal." Native SwiftUI + SwiftData, runs entirely on-device except for three external calls (Open Food Facts for barcode lookups, Anthropic Claude for photo estimation, USDA FoodData Central for food name search) and an optional two-way Apple Health sync.
+A personal iOS nutrition + fitness tracker. Display name on the home screen is **"MS Fitness"** as of v2.0; bundle ID, Xcode project name, and repo all still say "FoodJournal." Native SwiftUI + SwiftData, runs entirely on-device except for external calls (Open Food Facts for barcode lookups + text search, Anthropic Claude for photo estimation, USDA FoodData Central for food name search) and an optional two-way Apple Health sync.
 
 **Tab bar (5 tabs since v2.2):** `Food · Workouts · Health Data · Trends · Settings`. The Add tab was removed in v2.2 — food is added via the Food tab's meal cards (which open MealDetailSheet with Search / Scan / Photo / Manual entry buttons).
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.2)
+## Current state (v2.2.1)
 
 **Working features**
 
@@ -27,7 +27,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Past-day banner** appears at the top when not on today: orange card with a **Today** reset button.
 - **Dynamic nav title:** "Add food" today, "Add to Yesterday" / "Add to Mon, May 4" otherwise.
 - **Most Used** card → MostUsedSheet listing top 10 library foods by hybrid score (`useCount + recency * 5`). Tap row → Confirm screen. Swipe-left removes from library with 5-second undo.
-- **Search foods** — unified search across the local food library (passively populated from every save path) and USDA FoodData Central. Library results stream instantly; USDA follows after 300ms debounce. "Branded foods" toggle. Tap → Confirm.
+- **Search foods (v2.2.1: USDA + Open Food Facts)** — unified search across the local library, USDA FoodData Central, and Open Food Facts (text search, no API key). Library streams instantly; USDA + OFF run **concurrently** behind a single 300ms debounce. Results merge into one ranked list with per-row source tags (green USDA / orange OFF). Cross-source dedupe collapses near-duplicates on name + brand + ±15% calorie tolerance, preferring USDA on collisions. **Branded toggle** gates both USDA Branded and OFF (OFF is almost entirely branded). One failing source doesn't block the other — partial coverage beats none. In-flight task cancellation on each keystroke; USDA HTTP 400 is silently swallowed (server-side quirk) while every other USDA error still surfaces.
 - **Library swipe-add (v1.7.3)** — swipe right on any library row → green **Quick add** button creates a FoodEntry directly with default amounts (100g for per-100g foods, 1 serving otherwise). 5-second undo. Late-night warning still fires for snacks.
 - **Scan barcode** — Open Food Facts lookup pulls 19 nutrients where available.
 - **Photo estimate (v1.8.5: now multi-photo)** — opens the camera. After capture you see a thumbnail strip; up to 3 photos for the same meal from different angles. X to remove a thumb. Analyze sends all to Claude. Low-confidence card with Re-analyze (cache-bypassing) + Add angle.
@@ -228,9 +228,13 @@ FoodJournal/
 │                                        CachedPhotoEstimate, LibraryFood, WeightEntry,
 │                                        LibraryFoodUpsert helper, FoodFormat enum
 ├── Services/
-│   ├── OpenFoodFactsService.swift      barcode → product (full nutrition)
+│   ├── OpenFoodFactsService.swift      barcode → product (full nutrition) +
+│   │                                    v2.2.1: text-search (SearchHit shape mirrors
+│   │                                    USDA's; partial products kept, junk skipped)
 │   ├── ClaudeVisionService.swift       multi-photo → nutrition estimate; pixel-hash
-│   ├── USDAService.swift               food name → search hits (per-100g, normalized)
+│   ├── USDAService.swift               food name → search hits (per-100g, normalized).
+│   │                                    v2.2.1: USDAError.http carries the response body
+│   │                                    so api.data.gov's actual complaint reaches the UI.
 │   ├── LibraryService.swift            local library substring search + recency
 │   ├── MealTimeHelper.swift            user-configurable meal windows + late-night
 │   ├── KeychainStore.swift             parameterized key storage
@@ -289,7 +293,11 @@ FoodJournal/
     │                                    Self-contained NavigationStack.
     ├── BarcodeScannerSheet.swift       defaultMeal + defaultDate
     ├── PhotoLogSheet.swift             v1.8.5: multi-photo strip, low-confidence card
-    ├── SearchSheet.swift               library swipe-add with Health-sync wiring
+    ├── SearchSheet.swift               library + USDA + OFF unified search (v2.2.1).
+    │                                    Library swipe-add (v1.7.3) with Health-sync.
+    │                                    Concurrent USDA + OFF behind one debounce;
+    │                                    MergedHit ranks results with dedupe + source
+    │                                    tags; in-flight task cancellation per keystroke.
     ├── CSVExportSheet.swift            food + water + weight + (v1.9) energy CSV via
     │                                    share sheet
     ├── CSVImportSheet.swift            v2.0.1: inverse of CSVExportSheet. Per-type
@@ -320,7 +328,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), **v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only)** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only), **v2.2.1 (Open Food Facts text search + merged search results — view + service only)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 
@@ -342,7 +350,9 @@ git log --oneline -5
 - **Library per-serving fallback:** when a LibraryFood was originally logged with a non-gram unit, picking it from search/Most Used lands on Confirm with grams = 100. Macros are technically per-serving but presented "for 100g." Real-world impact small.
 - **SearchSheet quick-add is library-only** — USDA results have no swipe. To log a USDA food, tap → Confirm.
 - **SearchSheet quick-add late-night warning** fires the same alert as other paths. Slight friction; matches the rest of the app.
-- **Search results from USDA include duplicates** — Foundation and SR Legacy datasets often both contain the same food.
+- **Search results may include duplicates** — Foundation and SR Legacy datasets often both contain the same food (and the same product can appear in USDA Branded + Open Food Facts). v2.2.1's cross-source dedupe collapses USDA-vs-OFF near-duplicates on name + brand + ±15% calorie tolerance, preferring USDA — but it's heuristic. Occasionally over-collapses (hides a genuinely different food) or under-collapses (lets a true dup through). Tune in `mergeAndDedupe` in SearchSheet.swift.
+- **OFF results are crowd-sourced and frequently partial** — many products have only calories + macros, with optional nutrients (fiber, sugar, vitamins) missing. These display as `–` in the breakdown thanks to the nil ≠ 0 enforcement, but visually you'll see more `–` on OFF-sourced entries than USDA. That's coverage's cost, working as intended. The source tag on each row makes it easy to eyeball-distrust an OFF entry if it looks wrong.
+- **USDA HTTP 400 is silently swallowed** — api.data.gov's fronting nginx occasionally returns 400 Bad Request on rapid / bursty requests. v2.2.1 specifically catches this and shows no USDA results that round (no red error). Every other USDA error (missing key, 401/403/429, network failure, decode error) still surfaces with the actual cause text from api.data.gov.
 - **SearchSheet quick-add on past day defaults to noon.** No time picker on quick-add; fix via EditEntrySheet's Time picker.
 - **Schema-change reinstalls used to be lossy** — exporting then reinstalling threw away the on-device data with no way back. **As of v2.0.1 this is solved**: export via Settings → Data → Export, reinstall fresh, then restore via Settings → Data → Import data. The importer has a per-type empty-table guard, so it ONLY runs into a fresh install — protecting you from accidentally double-importing into a populated app. There is no dedupe/merge; the design assumption is "import only on a fresh install, once."
 - **HealthKit "Show All Data" view shows nutrients individually, not grouped as a meal.** Food entries are saved as individual quantity samples (not HKCorrelation) because correlation types can't be authorized for writes. Per-nutrient summary screens (Calories Consumed / Protein / etc.) are unaffected.
