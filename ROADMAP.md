@@ -1,10 +1,38 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v1.9. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.0.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.0.1 — CSV import (de-risks future schema-change reinstalls)
+
+**The inverse of CSVExportSheet: restore food/water/weight history into a freshly reinstalled app.**
+
+- ✅ New `CSVImportSheet` reachable from Settings → Data → Import data. `.fileImporter` accepts any subset of food/water/weight CSVs; kind is detected by header sniff, not filename, so renamed files still work.
+- ✅ APPEND-ONLY with a per-type empty-table guard. Each of FoodEntry/WaterEntry/WeightEntry must be empty (no non-soft-deleted rows) before that file's import will run. Non-empty tables get an orange "already contains data — import skipped" message; zero rows are touched. No dedupe/merge logic — by design, since the contract is "import only into a fresh install."
+- ✅ Exact inverse of CSVExportSheet: same files, same column order, same `yyyy-MM-dd` / `HH:mm` POSIX formatters, same RFC 4180 quoting. Critical nil ≠ 0 invariant preserved: empty optional cells parse to `Double? = nil`, never 0. Empty required fields (name, loggedAt, servings, calories, protein/carbs/fat, amountOz, weightLbs) mark the row malformed and skip it.
+- ✅ Exporter writes nutrient TOTALS (per-serving × servings); importer divides back by servings to recover per-serving storage. `servings ≤ 0` is treated as malformed (avoids divide-by-zero).
+- ✅ Imported FoodEntry calls `LibraryFoodUpsert.upsert(from:in:)` like every other save path so the search library + useCount rebuilds.
+- ✅ Imported entries intentionally do NOT fire HealthSync — they're historical restorations, not new logs; re-writing to Health would duplicate or orphan samples.
+- ✅ Source provenance preserved per-row: the FoodEntry's `source` is read from the CSV's source column (index 5). Only a blank cell falls back to `"import"`. Keeps `EntryRow.iconForSource` mapping intact across reinstalls (e.g. `source == "suggestion"` still renders with sparkles).
+- ✅ Energy CSV is recognized and reported as "not stored locally — Health is the source of truth."
+- ✅ Schema-clean. No new @Model fields, no reinstall.
+
+### v2.0 — Workouts tab + display-name rename to "MS Fitness"
+
+**App name on the home screen now reflects the broader fitness scope. Workouts tab reads from Apple Health.**
+
+- ✅ Display name: `INFOPLIST_KEY_CFBundleDisplayName = "MS Fitness"` in both Debug and Release configs. Bundle ID (`com.shawbler.FoodJournal`), `PRODUCT_NAME`, Xcode project name, and repo all remain "FoodJournal" — changing the bundle ID would orphan the SwiftData store.
+- ✅ New `WorkoutView` registered as the 5th tab in RootView (tag 3, between Trends and Settings; Settings shifts to tag 4). SF Symbol `figure.run`. Notification deep-link still targets tag 0 (Today).
+- ✅ HealthService extended: new `WorkoutSummary` plain struct (NOT a @Model — keeps schema clean), `readWorkouts(from:to:)` querying HKWorkout via `HKSampleQueryDescriptor`, `requestWorkoutReadAuthorization()` for the standalone read prompt, `activityInfo(for:)` mapping 12+ HKWorkoutActivityType values to (display name, SF Symbol) with a sensible default.
+- ✅ Active calories use `workout.statistics(for: .activeEnergyBurned)` (modern API; deprecated `workout.totalEnergyBurned` is NOT used). Distance maps `running/walking/hiking → distanceWalkingRunning` and `cycling → distanceCycling`; everything else is nil. Nil ≠ 0 applies — a strength workout shows no distance line.
+- ✅ Today summary card: 3 stat tiles (Workouts count today / Active cal today / Total duration today). "—" everywhere when no data (nil ≠ 0).
+- ✅ Apple Fitness list section: last 30 days, newest first, grouped by day with Today / Yesterday / formatted-date headers. Pull-to-refresh re-queries.
+- ✅ Composable section structure intentionally leaves slots open for v2.1 expansions (daily bodyweight tracker, strength routines) without re-architecting.
+- ✅ Empty state phrased "No workouts found" — HealthKit hides read-grant status for privacy, so genuine-no-data and denied-permission can't be distinguished by the app.
+- ✅ Schema-clean. No reinstall.
 
 ### v1.9 — Calories burned from Apple Health (read-only)
 
@@ -175,21 +203,24 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a really good place at v1.9. Tier 1 + Tier 2 (minus iCloud) are fully shipped, and v1.9 closes the loop on the Apple Health integration. The daily-driver loop is now genuinely tight:
+The app is in a great place at v2.0.1. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks future schema reinstalls via CSV import. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.
-- Trends shows longitudinal weight, macros, distribution by meal, and per-nutrient averages.
-- Apple Health mirrors everything; reminders nudge from outside the app.
+- Trends shows longitudinal weight, macros, distribution by meal, per-nutrient averages, and energy.
+- Apple Health mirrors everything (and now reads workouts + energy); reminders nudge from outside the app.
+- Reinstalls are no longer lossy — export then import.
 
-In rough order for next time:
+**v2.1 is in progress** (session-tracked; not detailed here):
+- **v2.1a** — schema for daily bodyweight tracker (pushups/situps/stretching) and strength-training routines + logging. Will be a schema-change session; bundle anything pending. CSV import (v2.0.1) is the safety net for the reinstall.
+- **v2.1b** — schedule view + Trends integration for the v2.1a data.
 
-1. **Use the app for 7–14 real days** before adding more features. v1.8.6 is the first version where the smart-suggestion banner can actually surface (needs 14 days of patterned data). Real usage will tell whether the heuristic is right.
+Beyond v2.1:
 
-2. **Recipe support** — highest-value Tier 3 item. Single new `@Model` + a new sheet to compose and a Most-Used-style integration point. Schema change so bundle anything else that's pending.
+1. **Recipe support** — single new `@Model` for a saved meal of multiple FoodEntry rows. Bundle with the next schema window if more items accumulate.
 
-3. **OCR of nutrition labels** — quick win once recipes are in. Adds value for unbranded products not in Open Food Facts.
+2. **OCR of nutrition labels** — quick Claude-vision reuse. Fills the Open Food Facts gap for unbranded products. No schema change.
 
-4. **UI polish** — low-priority, but a tinted app icon variant and a few small empty-state illustrations would round things out.
+3. **UI polish** — tinted app icon variant for iOS appearance modes, animated number transitions, dark-mode tuning.
 
-5. **CloudKit + App Store** — gated on the $99 decision. Still deferred.
+4. **CloudKit + App Store** — gated on the $99 decision. Still deferred.

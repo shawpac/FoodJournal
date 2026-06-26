@@ -1,6 +1,8 @@
 # FoodJournal — Project Context
 
-A personal iOS nutrition tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote, no collaborators. Personal use only — not on App Store. Currently v1.9.
+A personal iOS nutrition + fitness tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote auto-push, no collaborators. Personal use only — not on App Store. Currently v2.0.1.
+
+**Display name vs internal name:** the app shows as **"MS Fitness"** on the home screen (set via `INFOPLIST_KEY_CFBundleDisplayName` in `project.pbxproj` as of v2.0). The bundle ID (`com.shawbler.FoodJournal`), Xcode project name (`FoodJournal.xcodeproj`), repo, and all source identifiers remain "FoodJournal" — do NOT rename them. Changing the bundle ID would orphan the user's existing SwiftData store.
 
 Read SETUP.md for full feature reference. Read ROADMAP.md for pending work.
 
@@ -44,7 +46,7 @@ Schema changes (any new fields on `@Model` classes) require app reinstall on dev
 2. User long-presses app icon on phone → Remove App → Delete App.
 3. User runs from Xcode (⌘R) for fresh install.
 
-Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry). v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9** were schema-clean.
+Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry). v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import)** were schema-clean — no reinstall.
 
 ## Hard rules
 
@@ -96,6 +98,12 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **Net calories goal uses a sentinel-0 fallback.** Stored as `@AppStorage("netCaloriesGoal")` Double. Value `0` means "track the user's daily calorie goal automatically"; any other value is treated as a user override. The Settings field uses a computed Binding that returns `calorieGoal` when stored is 0 and writes through to AppStorage on edit. Same pattern in TodayView's `effectiveNetGoal`. Keeps v1.9 schema-clean (no new field on `UserGoals`).
 
+- **Workouts are queried from HealthKit on demand, never cached locally (v2.0).** `WorkoutView` calls `HealthService.readWorkouts(from:to:)` on appear + pull-to-refresh; the result is `[HealthService.WorkoutSummary]` (plain struct, NOT a `@Model`). Auth is requested via the dedicated `requestWorkoutReadAuthorization()` helper on first appear. Active calories use `workout.statistics(for: .activeEnergyBurned)` (the deprecated `totalEnergyBurned` is NOT used). Distance maps `running/walking/hiking → distanceWalkingRunning` and `cycling → distanceCycling`; everything else is `nil`. Nil ≠ 0 applies to both — a workout with no energy or no distance samples shows "—".
+
+- **CSV import is APPEND-ONLY with an empty-table guard per type (v2.0.1).** `CSVImportSheet` exposes a `.fileImporter` reachable from Settings → Data → Import data. It supports any subset of food/water/weight CSVs (detected by header sniff, not filename). Before processing a given file's rows, the corresponding table is checked for any non-soft-deleted entries; if non-empty, the file is skipped with a user-facing message and zero rows are inserted. There is intentionally NO dedupe/merge — the user's contract is "import only into a freshly reinstalled (empty) app." Imported `FoodEntry` rows call `LibraryFoodUpsert.upsert(from:in:)` like every other save path so the search library + useCount rebuilds. Import deliberately does NOT call `HealthSync` — these are historical restorations, not new logs; re-syncing would duplicate or orphan Health samples. Original `source` is preserved per-row from the CSV (column index 5); only blank source cells fall back to `"import"`. The energy.csv export is recognized but reported as "not stored locally" — energy is read-only from Health.
+
+- **CSV importer is the exact inverse of CSVExportSheet (v2.0.1).** Same files, same column order, same headers, same `yyyy-MM-dd` / `HH:mm` POSIX date format, same RFC 4180 quoting. Critical invariant: empty optional cells parse to `Double? = nil`, NEVER 0. Empty required cells (name, loggedAt, servings, calories, protein/carbs/fat, amountOz, weightLbs) mark the row malformed and skip it. The exporter writes nutrient TOTALS (per-serving × servings); the importer divides back by servings to recover per-serving storage. Servings ≤ 0 is treated as malformed (avoids divide-by-zero).
+
 ## Recurring pitfalls (do not re-make these mistakes)
 
 - **HealthKit: do NOT include `HKCorrelationType(.food)` in `requestAuthorization`'s `toShare:` set.** It crashes with `NSInvalidArgumentException: Authorization to share the following types is disallowed: HKCorrelationTypeIdentifierFood`. Confirmed during v1.8.2 development. Only request quantity types.
@@ -131,9 +139,10 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
   - `KeychainStore.swift` — parameterized key storage (anthropic + usda).
   - `NotificationService.swift` (v1.8.1) — daily meal reminder scheduling.
   - `NotificationCoordinator.swift` (v1.8.1) — `@Observable` UN delegate for foreground display + tap-to-deep-link.
-  - `HealthService.swift` (v1.8.2, extended in v1.9) — contains both `HealthService` (low-level HK ops including v1.9 active/basal energy reads — single-day and range) and `HealthSync` (write orchestration for v1.8.2). Read the file's header comments for the correlation-type gotcha. v1.9 added `requestEnergyReadAuthorization()` for the standalone read-only toggle.
+  - `HealthService.swift` (v1.8.2, extended in v1.9 and v2.0) — contains both `HealthService` (low-level HK ops) and `HealthSync` (write orchestration for v1.8.2). Read the file's header comments for the correlation-type gotcha. v1.9 added active/basal energy reads (single-day + range) and `requestEnergyReadAuthorization()`. v2.0 added `WorkoutSummary` (plain struct), `readWorkouts(from:to:)`, `requestWorkoutReadAuthorization()`, and an `activityInfo(for:)` mapping helper for 12+ HKWorkoutActivityType values → (display name, SF Symbol).
   - `UsualSuggestionService.swift` (v1.8.6) — heuristic for "your usual breakfast/lunch/dinner" suggestion banner.
-- `Views/RootView.swift` — TabView root, hoisted `selectedDate`, watches `NotificationCoordinator.pendingMealOpen` for deep-link to MealDetailSheet.
+- `Views/RootView.swift` — TabView root with 5 tabs (Today/Add/Trends/**Workouts** (v2.0, tag 3)/Settings), hoisted `selectedDate`, watches `NotificationCoordinator.pendingMealOpen` for deep-link to MealDetailSheet (deep-link still targets tag 0).
+- `Views/WorkoutView.swift` (v2.0) — Workouts tab. Composable section structure (today summary card + Apple Fitness list section; reserved slots for v2.1 daily bodyweight + strength routines). Reads from `HealthService.readWorkouts` on appear + pull-to-refresh. Self-contained state; does NOT share RootView's selectedDate (matches Trends/Settings precedent).
 - `Views/TodayView.swift` — date-navigable dashboard. Hosts WaterEntriesSheet (nested) + MealDetailSheet (nested). Smart-suggestion banner (v1.8.6) sits above the daily totals card. v1.9 energy strip (Consumed / Burned / Net / Active) sits between daily totals and water, gated by `showCaloriesBurnedFromHealth`. Meal cards show P/C/F line below calories (v1.8.4). EntryRow recognizes `source == "suggestion"` for sparkles icon. `StatTile.progress` is `Double?`; nil hides the bar (used by Consumed/Burned/Active).
 - `Views/AddFoodView.swift` — date-aware add tab + past-day banner + MostUsedSheet (nested).
 - `Views/TrendsView.swift` — range picker, per-section averages, Weight section (always visible since v1.8), v1.9 Energy section (Avg Active / Avg Total Burned / Avg Net) shown when `showCaloriesBurnedFromHealth` is on (parallel to Weight, outside the food-data gate), Distribution by meal section (v1.8.4), nested WeightEntriesSheet for log/manage.
@@ -141,8 +150,9 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 - `Views/NutritionBreakdownSheet.swift` — full 19-nutrient breakdown by selectedDate.
 - `Views/BarcodeScannerSheet.swift`, `Views/PhotoLogSheet.swift` — scanner + photo log. PhotoLogSheet was rewritten in v1.8.5 around `images: [UIImage]` for multi-photo.
 - `Views/CSVExportSheet.swift` — exports food/water/weight CSVs (v1.8.2 added weight; v1.9 adds energy.csv when `showCaloriesBurnedFromHealth` is on — per-day active/basal/total/consumed/net columns, nil → empty cell).
+- `Views/CSVImportSheet.swift` (v2.0.1) — inverse of CSVExportSheet. `.fileImporter` for any subset of food/water/weight CSVs (header-sniff detection). Per-type empty-table guard (aborts the file's import if non-soft-deleted rows already exist for that type). RFC 4180 parser, POSIX yyyy-MM-dd / HH:mm formatters. Food import calls `LibraryFoodUpsert.upsert`, preserves CSV `source` column, intentionally does NOT fire HealthSync.
 - `Views/NutrientGoalsSheet.swift` — editable goals for the 14 secondary nutrients.
-- `Views/AuxViews.swift` — ConfirmFoodView, ManualEntrySheet, EditEntrySheet, SettingsView (now contains Meal time schedule, Reminders, Smart suggestions, Apple Health sections), AnthropicKeySheet, USDAKeySheet, RelogSheet (dormant), dismissKeyboard, SelectAllOnFocus modifier, Haptic helper. Large file (~70KB) — search by `struct` keyword to navigate.
+- `Views/AuxViews.swift` — ConfirmFoodView, ManualEntrySheet, EditEntrySheet, SettingsView (Meal time schedule, Reminders, Smart suggestions, Apple Health sections; Data section has Export + **Import (v2.0.1)** + Reset library), AnthropicKeySheet, USDAKeySheet, RelogSheet (dormant), dismissKeyboard, SelectAllOnFocus modifier, Haptic helper. Large file (~70KB) — search by `struct` keyword to navigate.
 
 ## Manual Xcode steps locked in (don't repeat in new sessions)
 

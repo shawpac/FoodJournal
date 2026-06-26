@@ -1,10 +1,10 @@
-# FoodJournal
+# FoodJournal (display name: "MS Fitness")
 
-A personal iOS nutrition tracker. Native SwiftUI + SwiftData, runs entirely on-device except for three external calls (Open Food Facts for barcode lookups, Anthropic Claude for photo estimation, USDA FoodData Central for food name search) and an optional two-way Apple Health sync.
+A personal iOS nutrition + fitness tracker. Display name on the home screen is **"MS Fitness"** as of v2.0; bundle ID, Xcode project name, and repo all still say "FoodJournal." Native SwiftUI + SwiftData, runs entirely on-device except for three external calls (Open Food Facts for barcode lookups, Anthropic Claude for photo estimation, USDA FoodData Central for food name search) and an optional two-way Apple Health sync.
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v1.9)
+## Current state (v2.0.1)
 
 **Working features**
 
@@ -102,6 +102,24 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Surfaces as the orange banner described above on the Today tab.
 - Toggle in Settings → Smart suggestions → "Suggest your usual." Defaults ON.
 
+*Workouts tab (v2.0)*
+- 5th tab in the TabView, between Trends and Settings. SF Symbol `figure.run`.
+- Reads workouts from Apple Health (HKWorkout samples) on demand — never cached locally, matching the v1.9 invariant. Refreshes on tab appear and pull-to-refresh.
+- First open requests READ permission for HKWorkout + activeEnergyBurned + distanceWalkingRunning + distanceCycling via the existing `NSHealthShareUsageDescription` privacy string.
+- **Today summary card** at top: three stat tiles — Workouts count today / Active calories today (kcal) / Total duration today (`1h 5m` style). All three show `—` when no workouts logged today (nil ≠ 0).
+- **Apple Fitness list section** below: last 30 days of workouts, newest first, grouped by day (Today / Yesterday / `Mon, May 4`). Each row shows activity SF Symbol + display name, start time, duration, active calories (or `—`), and miles for run/walk/hike/cycle only (never for strength/yoga/etc.). Empty state if no workouts: "No workouts found" — phrased so denied permission and genuine-no-data are indistinguishable (HealthKit hides read-grant status).
+- Composable section structure leaves room for v2.1's daily bodyweight tracker and strength routines without re-architecting.
+- Active calories come from `workout.statistics(for: .activeEnergyBurned)` (the modern API; the deprecated `workout.totalEnergyBurned` is NOT used). Distance maps `running/walking/hiking → distanceWalkingRunning` and `cycling → distanceCycling`; everything else is nil.
+
+*CSV import (v2.0.1)*
+- New row in Settings → Data → **Import data** opens a sheet that supports `.fileImporter` for picking any subset of food/water/weight CSVs (renamed files are fine — header is sniffed, not the filename).
+- **Empty-table guard per type:** food/water/weight each require their table to be empty (no non-soft-deleted rows) before that file's import will run. If non-empty, the file is reported as skipped with an orange message and zero rows insert. There is intentionally no dedupe / merge / matching logic.
+- **Designed for one purpose**: restoring history after a schema-change reinstall. Use after a fresh app install, never on a populated app.
+- Imported FoodEntry rows call `LibraryFoodUpsert` (rebuilds search library + useCount) and **skip** HealthSync (they're historical restorations, not new logs — would duplicate or orphan HK samples otherwise).
+- Source provenance is preserved per-row from the CSV's source column. Only a blank source cell falls back to `"import"`. So sparkles-icon `source == "suggestion"` rows still render correctly after a round-trip.
+- Nil ≠ 0 round-trip: a food entry with a blank optional nutrient in the CSV (empty cell) parses back to `Double? = nil`, never 0. Blank required fields (name, loggedAt, servings, calories, protein/carbs/fat) mark the row malformed and skip it.
+- Energy CSV: detected and reported as "not stored locally" since it's read-only from Health.
+
 *Settings*
 - Save button in top-right nav bar.
 - Daily goals for calories / protein / carbs / fat / water.
@@ -111,7 +129,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Reminders** (v1.8.1): per-meal toggle + time picker.
 - **Smart suggestions** (v1.8.6): single toggle.
 - **Apple Health** (v1.8.2 + v1.9): two independent toggles — "Sync to Apple Health" (write food/water/weight) and "Show calories burned" (read active + basal energy). Import weight button visible when sync is on.
-- **Data section:** Export data (now exports food + water + weight CSVs), Reset food library.
+- **Data section:** Export data (food + water + weight CSVs, plus energy.csv when burn-toggle is on), **Import data (v2.0.1)** (restore food/water/weight from CSV — empty-table guarded), Reset food library.
 - **API keys section:** compact rows with Set/Not set status.
 
 *App icon*
@@ -179,21 +197,32 @@ FoodJournal/
 │   ├── HealthService.swift             v1.8.2: HealthService + HealthSync orchestration
 │   └── UsualSuggestionService.swift    v1.8.6: "your usual?" suggestion logic
 └── Views/
-    ├── RootView.swift                  TabView, hoisted selectedDate, deep-link watcher
+    ├── RootView.swift                  TabView (5 tabs: Today/Add/Trends/Workouts/
+    │                                    Settings), hoisted selectedDate, deep-link
+    │                                    watcher
     ├── TodayView.swift                 dashboard, smart-suggestion banner, P/C/F line
     │                                    on meal cards, water + suggestion undo handling
     ├── AddFoodView.swift               date-aware add tab, past-day banner
     ├── TrendsView.swift                Weight section (always-visible), Distribution
     │                                    by meal section, WeightEntriesSheet
+    ├── WorkoutView.swift               v2.0: Workouts tab. Today summary + Apple
+    │                                    Fitness list, on-demand HK reads, composable
+    │                                    sections for v2.1 expansion
     ├── BarcodeScannerSheet.swift       defaultMeal + defaultDate
     ├── PhotoLogSheet.swift             v1.8.5: multi-photo strip, low-confidence card
     ├── SearchSheet.swift               library swipe-add with Health-sync wiring
-    ├── CSVExportSheet.swift            food + water + weight CSV via share sheet
+    ├── CSVExportSheet.swift            food + water + weight + (v1.9) energy CSV via
+    │                                    share sheet
+    ├── CSVImportSheet.swift            v2.0.1: inverse of CSVExportSheet. Per-type
+    │                                    empty-table guard, RFC 4180 parser,
+    │                                    LibraryFoodUpsert on food rows, skips
+    │                                    HealthSync, preserves CSV source column
     ├── NutritionBreakdownSheet.swift   respects selectedDate + pendingDeleteAt
     ├── NutrientGoalsSheet.swift        editable goals for the 14 secondary nutrients
     └── AuxViews.swift                  ConfirmFoodView, ManualEntrySheet, EditEntrySheet,
                                          SettingsView (Meal schedule, Reminders, Smart
-                                         suggestions, Apple Health sections),
+                                         suggestions, Apple Health, Data section with
+                                         Export + v2.0.1 Import + Reset library),
                                          AnthropicKeySheet, USDAKeySheet, RelogSheet
                                          (dormant), helpers
 ```
@@ -212,7 +241,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. So far: v1.8 and v1.8.2 required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8 and v1.8.2 required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, **v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 
@@ -236,6 +265,7 @@ git log --oneline -5
 - **SearchSheet quick-add late-night warning** fires the same alert as other paths. Slight friction; matches the rest of the app.
 - **Search results from USDA include duplicates** — Foundation and SR Legacy datasets often both contain the same food.
 - **SearchSheet quick-add on past day defaults to noon.** No time picker on quick-add; fix via EditEntrySheet's Time picker.
+- **Schema-change reinstalls used to be lossy** — exporting then reinstalling threw away the on-device data with no way back. **As of v2.0.1 this is solved**: export via Settings → Data → Export, reinstall fresh, then restore via Settings → Data → Import data. The importer has a per-type empty-table guard, so it ONLY runs into a fresh install — protecting you from accidentally double-importing into a populated app. There is no dedupe/merge; the design assumption is "import only on a fresh install, once."
 - **HealthKit "Show All Data" view shows nutrients individually, not grouped as a meal.** Food entries are saved as individual quantity samples (not HKCorrelation) because correlation types can't be authorized for writes. Per-nutrient summary screens (Calories Consumed / Protein / etc.) are unaffected.
 - **HealthKit write failures are silent.** If a specific nutrient type was denied write permission, that sample is skipped. The remaining ones still write.
 - **Smart-suggestion dismissal is in-memory only.** Tapping X hides for the rest of the view's lifetime. App relaunch resets. Acceptable for v1.
