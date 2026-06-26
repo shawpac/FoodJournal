@@ -6,7 +6,7 @@ A personal iOS nutrition + fitness tracker. Display name on the home screen is *
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.2.1)
+## Current state (v2.2.2)
 
 **Working features**
 
@@ -30,7 +30,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Search foods (v2.2.1: USDA + Open Food Facts)** — unified search across the local library, USDA FoodData Central, and Open Food Facts (text search, no API key). Library streams instantly; USDA + OFF run **concurrently** behind a single 300ms debounce. Results merge into one ranked list with per-row source tags (green USDA / orange OFF). Cross-source dedupe collapses near-duplicates on name + brand + ±15% calorie tolerance, preferring USDA on collisions. **Branded toggle** gates both USDA Branded and OFF (OFF is almost entirely branded). One failing source doesn't block the other — partial coverage beats none. In-flight task cancellation on each keystroke; USDA HTTP 400 is silently swallowed (server-side quirk) while every other USDA error still surfaces.
 - **Library swipe-add (v1.7.3)** — swipe right on any library row → green **Quick add** button creates a FoodEntry directly with default amounts (100g for per-100g foods, 1 serving otherwise). 5-second undo. Late-night warning still fires for snacks.
 - **Scan barcode** — Open Food Facts lookup pulls 19 nutrients where available.
-- **Photo estimate (v1.8.5: now multi-photo)** — opens the camera. After capture you see a thumbnail strip; up to 3 photos for the same meal from different angles. X to remove a thumb. Analyze sends all to Claude. Low-confidence card with Re-analyze (cache-bypassing) + Add angle.
+- **Photo estimate (v1.8.5: multi-photo; v2.2.2: typed context)** — opens the camera. After capture you see a thumbnail strip; up to 3 photos for the same meal from different angles. X to remove a thumb. **Optional context field below the photo strip** lets you type weights, brands, prep notes (e.g. "6 oz grilled chicken, no oil") that Claude is instructed to treat as authoritative over what it would infer from the photo alone. Analyze sends photos + context to Claude. Low-confidence card with Re-analyze (cache-bypassing) + Add angle. Context is folded into the cache hash so the same photo with different context misses cache; an empty context preserves the v1.8.5 cache hash byte-for-byte.
 - **Manual entry** — full form with Carbs detail / Fats detail / Cholesterol & electrolytes / Vitamins & minerals sections. Serving unit picker (g, ml, oz, serving, cup, tbsp, tsp, plus Custom…). Per-serving / total amount toggle.
 
 *Manual entry per-serving / totals mode*
@@ -292,7 +292,10 @@ FoodJournal/
     │                                    trend chart. Missing days are gaps, never 0.
     │                                    Self-contained NavigationStack.
     ├── BarcodeScannerSheet.swift       defaultMeal + defaultDate
-    ├── PhotoLogSheet.swift             v1.8.5: multi-photo strip, low-confidence card
+    ├── PhotoLogSheet.swift             v1.8.5 multi-photo strip + v1.8.5 low-confidence
+    │                                    card + v2.2.2 typed-context TextField between
+    │                                    photos and Analyze; context threads through the
+    │                                    cache lookup and the Claude API call.
     ├── SearchSheet.swift               library + USDA + OFF unified search (v2.2.1).
     │                                    Library swipe-add (v1.7.3) with Health-sync.
     │                                    Concurrent USDA + OFF behind one debounce;
@@ -328,7 +331,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only), **v2.2.1 (Open Food Facts text search + merged search results — view + service only)** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only), v2.2.1 (Open Food Facts text search + merged search results — view + service only), **v2.2.2 (typed-context field on photo estimate — view + service only)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 

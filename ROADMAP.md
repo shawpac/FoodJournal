@@ -1,10 +1,20 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.2.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.2.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.2.2 — Typed-context field on photo estimate
+
+**Photos alone can't tell Claude that the chicken breast is 6 oz or that the granola is from a particular brand. Now you can type that.**
+
+- ✅ New optional context field in `PhotoLogSheet`: a multi-line TextField between the photo strip and the Analyze button, with placeholder examples ("6 oz chicken breast, grilled" / "weighs 200g"). Stays visible during/after analysis so the user can refine and Re-analyze with new context.
+- ✅ `ClaudeVisionService.estimate(images:userContext:apiKey:)` and `prepareImages(_:userContext:)` now take an optional `String userContext`. When non-empty, a context block is **prepended to the prompt** instructing Claude to treat user-provided weights / names / brands / prep details as MORE authoritative than what it would infer from the photo. The base prompt is unchanged.
+- ✅ Context is **folded into the cache hash** (SHA256 over `imageHash + "|ctx|" + lowercased context`) so the same photo with different context misses cache and triggers a fresh Claude call. **Empty context preserves the v1.8.5 cache hash byte-for-byte** — every prior cached estimate keeps hitting.
+- ✅ Low-confidence Re-analyze path picks up the current context automatically (it calls `analyze(force: true)` which reads the current `userContext` state).
+- ✅ Schema-clean. View + service only. No reinstall.
 
 ### v2.2.1 — Open Food Facts text search alongside USDA (merged, deduped, source-tagged)
 
@@ -275,7 +285,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.2.1. **The v2.1 strength feature set is fully done**, **v2.2 closed the read-side Apple Health loop**, and **v2.2.1 fixed USDA's thin packaged-food coverage by adding Open Food Facts as a second text-search source.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs; v2.2.1 added OFF text search with merge + dedupe + source tags. The daily-driver loop is genuinely tight:
+The app is in a great place at v2.2.2. **The v2.1 strength feature set is fully done**, **v2.2 closed the read-side Apple Health loop**, **v2.2.1 fixed USDA's thin packaged-food coverage by adding Open Food Facts as a second text-search source**, and **v2.2.2 lets the user feed Claude typed context (weights / brands / prep notes) to refine photo estimates.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs; v2.2.1 added OFF text search with merge + dedupe + source tags; v2.2.2 added the photo-context field. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.

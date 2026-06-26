@@ -1,6 +1,6 @@
 # FoodJournal — Project Context
 
-A personal iOS nutrition + fitness tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote auto-push, no collaborators. Personal use only — not on App Store. Currently v2.2.1.
+A personal iOS nutrition + fitness tracker (SwiftUI + SwiftData) for Mike Shaw's iPhone 17 Pro Max. Single-developer, no remote auto-push, no collaborators. Personal use only — not on App Store. Currently v2.2.2.
 
 **Display name vs internal name:** the app shows as **"MS Fitness"** on the home screen (set via `INFOPLIST_KEY_CFBundleDisplayName` in `project.pbxproj` as of v2.0). The bundle ID (`com.shawbler.FoodJournal`), Xcode project name (`FoodJournal.xcodeproj`), repo, and all source identifiers remain "FoodJournal" — do NOT rename them. Changing the bundle ID would orphan the user's existing SwiftData store.
 
@@ -46,7 +46,7 @@ Schema changes (any new fields on `@Model` classes) require app reinstall on dev
 2. User long-presses app icon on phone → Remove App → Delete App.
 3. User runs from Xcode (⌘R) for fresh install.
 
-Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry), **v2.1a (7 new @Models: ExerciseRepEntry, StretchDay, StrengthRoutine, RoutineExercise, StrengthSession, LoggedExercise, LoggedSet — first @Relationship cascades in the schema)**. v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only reorganization), v2.1b (weekly strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + 5-tab bar reorg — view + HealthKit reads only), **v2.2.1 (Open Food Facts text search + merge/dedupe/source tags — view + service only)** were schema-clean — no reinstall.
+Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntry), v1.8.2 (healthSampleID on FoodEntry/WaterEntry/WeightEntry, importedFromHealth on WeightEntry), **v2.1a (7 new @Models: ExerciseRepEntry, StretchDay, StrengthRoutine, RoutineExercise, StrengthSession, LoggedExercise, LoggedSet — first @Relationship cascades in the schema)**. v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only reorganization), v2.1b (weekly strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + 5-tab bar reorg — view + HealthKit reads only), v2.2.1 (Open Food Facts text search + merge/dedupe/source tags — view + service only), **v2.2.2 (typed-context field on photo estimate — view + ClaudeVisionService only)** were schema-clean — no reinstall.
 
 ## Hard rules
 
@@ -124,6 +124,8 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 
 - **SearchSheet cancels its in-flight remote fetch on every keystroke (v2.2.1).** The Task reference lives in `@State remoteFetchTask`. Cancellation propagates through Swift structured concurrency to the URLSession data tasks inside. This prevents rapid typing from piling concurrent HTTPS requests onto the same HTTP/2 connection — a real fix for the api.data.gov nginx-400 symptom that appeared with v2.2.1's two-source concurrency. `CancellationError` is suppressed inside the per-source closures so cancelled fetches don't surface as user-facing errors.
 
+- **Photo estimate accepts optional user-typed context (v2.2.2).** `ClaudeVisionService.estimate(images:userContext:apiKey:)` and `prepareImages(_:userContext:)` take an optional `String userContext`. When non-empty, a context block is prepended to the prompt instructing Claude to treat user-provided weights, names, brands, and prep details as MORE authoritative than what it would infer from the photo. The context is ALSO folded into the cache hash (SHA256 over `imageHash + "|ctx|" + lowercased context`) so the same photo with different context misses cache and triggers a fresh Claude call. **Empty context preserves the v1.8.5 cache hash byte-for-byte** — existing cached estimates keep hitting. PhotoLogSheet's `contextField` lives between the photo strip and the Analyze button; stays visible during/after analysis so the user can refine and Re-analyze.
+
 ## Recurring pitfalls (do not re-make these mistakes)
 
 - **HealthKit: do NOT include `HKCorrelationType(.food)` in `requestAuthorization`'s `toShare:` set.** It crashes with `NSInvalidArgumentException: Authorization to share the following types is disallowed: HKCorrelationTypeIdentifierFood`. Confirmed during v1.8.2 development. Only request quantity types.
@@ -169,7 +171,7 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
   - `LibraryService.swift` — local library substring search + recency scoring.
   - `USDAService.swift` — USDA FoodData Central text-search (requires personal API key). `USDAError.http(code, body)` carries the response body so api.data.gov's actual complaint is visible in UI errors (v2.2.1).
   - `OpenFoodFactsService.swift` — barcode lookup (v1.5) + text-search (v2.2.1). Search returns `SearchHit` rows matching USDA's normalized shape; partial products with missing optional nutrients are KEPT (nil stays nil), un-loggable products with no name / no nutriments / no calorie info are SKIPPED.
-  - `ClaudeVisionService.swift` — photo → nutrition estimate; supports multi-image (v1.8.5).
+  - `ClaudeVisionService.swift` — photo → nutrition estimate. Multi-image (v1.8.5). v2.2.2: `estimate(images:userContext:apiKey:)` accepts optional typed context that's both prepended to the prompt AND folded into the cache hash (empty context preserves v1.8.5 cache entries verbatim).
   - `KeychainStore.swift` — parameterized key storage (anthropic + usda).
   - `NotificationService.swift` (v1.8.1) — daily meal reminder scheduling.
   - `NotificationCoordinator.swift` (v1.8.1) — `@Observable` UN delegate for foreground display + tap-to-deep-link.
@@ -193,7 +195,7 @@ Schema-change versions so far: v1.8 (WaterEntry.pendingDeleteAt + new WeightEntr
 - `Views/TrendsView.swift` — range picker, per-section averages, Weight section (always visible since v1.8), v1.9 Energy section (Avg Active / Avg Total Burned / Avg Net) shown when `showCaloriesBurnedFromHealth` is on (parallel to Weight, outside the food-data gate), Distribution by meal section (v1.8.4), nested WeightEntriesSheet for log/manage.
 - `Views/SearchSheet.swift` — library + **USDA + Open Food Facts (v2.2.1)** unified search. Library swipe-add (v1.7.3) with HealthSync wiring (v1.8.2). USDA + OFF queried concurrently from one debounce; merged + deduped + source-tagged via the `MergedHit` struct. In-flight task cancellation on each keystroke prevents api.data.gov nginx-400 from rapid bursts.
 - `Views/NutritionBreakdownSheet.swift` — full 19-nutrient breakdown by selectedDate.
-- `Views/BarcodeScannerSheet.swift`, `Views/PhotoLogSheet.swift` — scanner + photo log. PhotoLogSheet was rewritten in v1.8.5 around `images: [UIImage]` for multi-photo.
+- `Views/BarcodeScannerSheet.swift`, `Views/PhotoLogSheet.swift` — scanner + photo log. PhotoLogSheet was rewritten in v1.8.5 around `images: [UIImage]` for multi-photo. v2.2.2: a `contextField` between the photo strip and the Analyze button accepts optional typed context (weight / brand / prep notes) that's threaded into both the cache lookup and the Claude API call.
 - `Views/CSVExportSheet.swift` — exports food/water/weight CSVs (v1.8.2 added weight; v1.9 adds energy.csv when `showCaloriesBurnedFromHealth` is on — per-day active/basal/total/consumed/net columns, nil → empty cell).
 - `Views/CSVImportSheet.swift` (v2.0.1) — inverse of CSVExportSheet. `.fileImporter` for any subset of food/water/weight CSVs (header-sniff detection). Per-type empty-table guard (aborts the file's import if non-soft-deleted rows already exist for that type). RFC 4180 parser, POSIX yyyy-MM-dd / HH:mm formatters. Food import calls `LibraryFoodUpsert.upsert`, preserves CSV `source` column, intentionally does NOT fire HealthSync.
 - `Views/NutrientGoalsSheet.swift` — editable goals for the 14 secondary nutrients.
