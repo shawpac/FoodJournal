@@ -17,21 +17,27 @@ struct RootView: View {
     @Environment(NotificationCoordinator.self) private var notificationCoordinator
 
     var body: some View {
+        // v2.2 reorganization: 5 tabs total, no "More" overflow.
+        // Order: Food (was Today) · Workouts · Health Data · Trends · Settings.
+        // The Add tab was removed — food is logged via Today's meal cards
+        // (MealDetailSheet) which is how the user actually adds meals.
+        // AddFoodView.swift is left in the project but unreferenced; safe to
+        // delete in a later cleanup if it stays unused.
         TabView(selection: $selectedTab) {
             TodayView(selectedDate: $selectedDate, pendingMealKey: $pendingMealKey)
-                .tabItem { Label("Today", systemImage: "fork.knife") }
+                .tabItem { Label("Food", systemImage: "fork.knife") }
                 .tag(0)
-
-            AddFoodView(selectedDate: $selectedDate)
-                .tabItem { Label("Add", systemImage: "plus.circle.fill") }
-                .tag(1)
-
-            TrendsView()
-                .tabItem { Label("Trends", systemImage: "chart.line.uptrend.xyaxis") }
-                .tag(2)
 
             WorkoutView()
                 .tabItem { Label("Workouts", systemImage: "figure.run") }
+                .tag(1)
+
+            HealthMetricsView()
+                .tabItem { Label("Health Data", systemImage: "heart.text.square") }
+                .tag(2)
+
+            TrendsView()
+                .tabItem { Label("Trends", systemImage: "chart.line.uptrend.xyaxis") }
                 .tag(3)
 
             SettingsView()
