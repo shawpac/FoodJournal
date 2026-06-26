@@ -20,6 +20,10 @@ struct PhotoLogSheet: View {
     private let maxPhotos = 3
 
     @State private var images: [UIImage] = []
+    /// v2.2.2 — optional typed context the user attaches to the photo set
+    /// (weight, brand, prep notes). Folded into both the prompt and the
+    /// cache hash so the same photo with different context misses cache.
+    @State private var userContext: String = ""
     /// Camera writes here; .onDisappear transfers into `images` so the picker
     /// itself doesn't need to know about the array.
     @State private var newPhotoBuffer: UIImage?
@@ -41,6 +45,11 @@ struct PhotoLogSheet: View {
                         takePhotoCTA
                     } else {
                         photoStrip
+
+                        // v2.2.2 — context field. Stays visible during and
+                        // after analysis so the user can refine and Re-analyze
+                        // with new context.
+                        contextField
 
                         if isAnalyzing {
                             ProgressView("Asking Claude…")
@@ -210,6 +219,38 @@ struct PhotoLogSheet: View {
         }
     }
 
+    /// Multi-line context field. The user types weights, brands, prep
+    /// notes — anything that helps Claude estimate accurately. Optional;
+    /// leaving it blank preserves the v1.8.5 behavior exactly (including
+    /// the cache hash, so prior cached estimates still hit).
+    private var contextField: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble")
+                    .foregroundStyle(.secondary)
+                Text("Add context (optional)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            TextField(
+                "e.g. \"6 oz chicken breast, grilled\" or \"weighs 200g\"",
+                text: $userContext,
+                axis: .vertical
+            )
+            .lineLimit(2...5)
+            .textInputAutocapitalization(.sentences)
+            .padding(10)
+            .background(Color(.tertiarySystemGroupedBackground),
+                        in: RoundedRectangle(cornerRadius: 10))
+            Text("Claude will treat your text as authoritative — use it for weights, brands, or prep details the photo can't show.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 12))
+    }
+
     private var analyzeButton: some View {
         Button {
             Task { await analyze(force: false) }
@@ -279,7 +320,10 @@ struct PhotoLogSheet: View {
             errorMessage = "Take a photo first."
             return
         }
-        guard let prepared = ClaudeVisionService.prepareImages(images) else {
+        // v2.2.2 — fold the user context into the cache hash so the same
+        // photo with different context misses cache and re-queries Claude.
+        // Empty context falls through to the v1.8.5 hash unchanged.
+        guard let prepared = ClaudeVisionService.prepareImages(images, userContext: userContext) else {
             errorMessage = "Could not encode image(s)."
             return
         }
@@ -306,7 +350,7 @@ struct PhotoLogSheet: View {
         estimate = nil
         defer { isAnalyzing = false }
         do {
-            let result = try await ClaudeVisionService.estimate(images: images, apiKey: key)
+            let result = try await ClaudeVisionService.estimate(images: images, userContext: userContext, apiKey: key)
             estimate = result
 
             // Upsert the cache. Re-analyze hits the existing-row branch and
