@@ -2,9 +2,11 @@
 
 A personal iOS nutrition + fitness tracker. Display name on the home screen is **"MS Fitness"** as of v2.0; bundle ID, Xcode project name, and repo all still say "FoodJournal." Native SwiftUI + SwiftData, runs entirely on-device except for three external calls (Open Food Facts for barcode lookups, Anthropic Claude for photo estimation, USDA FoodData Central for food name search) and an optional two-way Apple Health sync.
 
+**Tab bar (5 tabs since v2.2):** `Food · Workouts · Health Data · Trends · Settings`. The Add tab was removed in v2.2 — food is added via the Food tab's meal cards (which open MealDetailSheet with Search / Scan / Photo / Manual entry buttons).
+
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.1b)
+## Current state (v2.2)
 
 **Working features**
 
@@ -102,8 +104,18 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Surfaces as the orange banner described above on the Today tab.
 - Toggle in Settings → Smart suggestions → "Suggest your usual." Defaults ON.
 
+*Health Data tab (v2.2)*
+- New 3rd tab, between Workouts and Trends. SF Symbol `heart.text.square`.
+- Read-only Apple Health dashboard. Reads vitals + sleep + blood pressure on demand from HealthKit; nothing is cached locally — same invariant as v1.9 energy and v2.0 workouts.
+- First open requests READ permission for ~12 types at once (sleep, 9 single-value vitals, systolic + diastolic). Reuses the existing `NSHealthShareUsageDescription` privacy string from v1.8.2.
+- Tile grid: **Sleep** (last night's asleep duration + REM / Core / Deep stage pills), **Blood pressure** (latest pair as `120/80` or `–` with a "manual entry or cuff" hint), plus 9 single-value vital tiles — Heart rate, Resting HR, HRV, Blood oxygen, Respiratory rate, Steps, VO2 max, Wrist temperature, Walking double support.
+- Each tile is tappable and pushes a trend page with a 7d / 30d range picker and a Swift Charts line + point chart. **Missing days are gaps, not zeros** (nil ≠ 0). Trend pages also show Average / Min / Max / Days-with-data underneath the chart.
+- Sleep trend plots nightly asleep duration in hours. BP trend plots systolic + diastolic as two color-coded series.
+- Honest "denial = no data" disclaimer at the bottom: HealthKit hides read-grant status, so a permanently `–` tile may mean either no data exists OR you denied permission. Check the Health app's permission screen if unsure.
+- **Architecture**: a descriptor-driven generic path. `HealthService.healthMetrics: [HealthMetric]` is the single source of truth for the vital list — adding a future metric is a one-line entry. Generic readers `readMetricToday` / `readMetricByDay` dispatch on `MetricAggregation` (`.average` for rate-style metrics; `.sum` for steps; `.latest` for VO2 max + wrist temp). Sleep and BP have bespoke readers because they don't fit the single-value pattern.
+
 *Workouts tab (v2.0)*
-- 5th tab in the TabView, between Trends and Settings. SF Symbol `figure.run`.
+- 2nd tab in the TabView (since v2.2), between Food and Health Data. SF Symbol `figure.run`.
 - Reads workouts from Apple Health (HKWorkout samples) on demand — never cached locally, matching the v1.9 invariant. Refreshes on tab appear and pull-to-refresh.
 - First open requests READ permission for HKWorkout + activeEnergyBurned + distanceWalkingRunning + distanceCycling via the existing `NSHealthShareUsageDescription` privacy string.
 - **Today summary card** at top: three stat tiles — Workouts count today / Active calories today (kcal) / Total duration today (`1h 5m` style). All three show `—` when no workouts logged today (nil ≠ 0).
@@ -226,16 +238,24 @@ FoodJournal/
 │   ├── NotificationCoordinator.swift   v1.8.1: @Observable UN delegate
 │   ├── HealthService.swift             v1.8.2: HealthService + HealthSync orchestration
 │   ├── UsualSuggestionService.swift    v1.8.6: "your usual?" suggestion logic
-│   └── StrengthSchedule.swift          v2.1b: AppStorage-backed weekday → routineID
-│                                        JSON map. Decode/encode helpers; resolution
-│                                        to SwiftData is the view's job.
+│   ├── StrengthSchedule.swift          v2.1b: AppStorage-backed weekday → routineID
+│   │                                    JSON map. Decode/encode helpers; resolution
+│   │                                    to SwiftData is the view's job.
+│   └── HealthMetrics.swift             v2.2: extension HealthService. Descriptor list
+│                                        for 9 single-value vitals + generic readers
+│                                        (today + range). SleepNight + BPReading types
+│                                        with bespoke readers. Adds workout permission
+│                                        helper that prompts for all v2.2 types at once.
 └── Views/
-    ├── RootView.swift                  TabView (5 tabs: Today/Add/Trends/Workouts/
-    │                                    Settings), hoisted selectedDate, deep-link
-    │                                    watcher
-    ├── TodayView.swift                 dashboard, smart-suggestion banner, P/C/F line
-    │                                    on meal cards, water + suggestion undo handling
-    ├── AddFoodView.swift               date-aware add tab, past-day banner
+    ├── RootView.swift                  v2.2 — TabView with 5 tabs in order:
+    │                                    Food (was Today) · Workouts · Health Data ·
+    │                                    Trends · Settings. Hoisted selectedDate,
+    │                                    notification deep-link to tag 0 (Food).
+    ├── TodayView.swift                 hosts the Food tab. Dashboard, smart-suggestion
+    │                                    banner, P/C/F line on meal cards, water +
+    │                                    suggestion undo handling
+    ├── AddFoodView.swift               DORMANT as of v2.2 — was the Add tab, removed
+    │                                    from the TabView. File preserved for revival.
     ├── TrendsView.swift                Weight section (always-visible), Distribution
     │                                    by meal section, WeightEntriesSheet
     ├── WorkoutView.swift               v2.0 + v2.1a / v2.1a.1 / v2.1b: Workouts tab.
@@ -263,6 +283,10 @@ FoodJournal/
     ├── StrengthTrendsSheet.swift       v2.1b: per-exercise charts. Top-set weight +
     │                                    est. 1RM (Epley), computed independently per
     │                                    session. Swift Charts. Raw sets disclosure.
+    ├── HealthMetricsView.swift         v2.2: Health Data tab. Tile grid (sleep + BP
+    │                                    specials + 9 vitals); each tile pushes a 7d/30d
+    │                                    trend chart. Missing days are gaps, never 0.
+    │                                    Self-contained NavigationStack.
     ├── BarcodeScannerSheet.swift       defaultMeal + defaultDate
     ├── PhotoLogSheet.swift             v1.8.5: multi-photo strip, low-confidence card
     ├── SearchSheet.swift               library swipe-add with Health-sync wiring
@@ -296,7 +320,7 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
 - Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), **v2.1b (strength schedule + per-exercise trends — view + AppStorage only)** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), **v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only)** were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 

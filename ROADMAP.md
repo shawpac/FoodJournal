@@ -1,10 +1,24 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.1b. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.2 — Health Data tab (read-only Apple Health metrics) + tab bar reorg
+
+**Closes the read-side Apple Health loop: vitals + sleep + BP are now a first-class surface, not buried behind a row. Also trims the tab bar to a sane 5 tabs.**
+
+- ✅ New **Health Data tab** (3rd of 5), pushing a read-only dashboard. SF Symbol `heart.text.square`.
+- ✅ Tile grid: sleep tile (last night's asleep duration + REM/Core/Deep stage pills), BP tile (latest pair or `–` with a "manual entry or cuff" hint), plus 9 single-value vitals — Heart rate, Resting HR, HRV, Blood oxygen, Respiratory rate, Steps, VO2 max, Wrist temperature, Walking double support.
+- ✅ Each tile is tappable and pushes a 7d / 30d Swift Charts trend page. **Missing days are gaps, not zero values** (nil ≠ 0). Average / Min / Max / Days-with-data underneath.
+- ✅ Sleep trend plots nightly asleep duration in hours. BP trend plots systolic + diastolic as two color-coded series.
+- ✅ **Architecture is descriptor-driven.** `HealthService.healthMetrics: [HealthMetric]` is the single source of truth — adding a new vital is a one-line entry. Generic `readMetricToday` / `readMetricByDay` dispatch on `MetricAggregation` (`.average` for rate-style metrics; `.sum` for steps; `.latest` for VO2 max + wrist temp). Sleep + BP have bespoke readers because they don't fit the single-value pattern. New `requestHealthMetricsReadAuthorization()` requests all v2.2 read types in one prompt.
+- ✅ Reuses the existing `NSHealthShareUsageDescription` privacy string from v1.8.2. No new Info.plist entry.
+- ✅ Honest "denial = no data" disclaimer at the bottom: HealthKit can't expose read-grant status, so a permanently `–` tile could be no data OR denied permission.
+- ✅ **Tab bar reorg** (the user-driven companion change). New order: `Food · Workouts · Health Data · Trends · Settings` — 5 tabs, no More overflow. **Today renamed to Food.** **Add tab removed** (food is logged via the Food tab's meal cards). The notification deep-link still targets tag 0 (= Food = the same TodayView surface). `AddFoodView.swift` is kept in the project but unreferenced; safe to delete later.
+- ✅ Schema-clean. No new @Model, no FoodJournalApp.swift change. HealthKit data is read on demand, never cached locally — same invariant as v1.9 energy and v2.0 workouts.
 
 ### v2.1b — Weekly strength schedule + per-exercise trends
 
@@ -246,7 +260,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.1b. **The v2.1 strength feature set is fully done** — routines, schedule, logging, history, and per-exercise trends. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health read loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface. The daily-driver loop is genuinely tight:
+The app is in a great place at v2.2. **The v2.1 strength feature set is fully done** and **v2.2 closes the read-side Apple Health loop with the new Health Data tab.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.
@@ -256,8 +270,9 @@ The app is in a great place at v2.1b. **The v2.1 strength feature set is fully d
 - Strength + daily reps + stretch tracking are logged and persisted (verified across force-quit and a full reinstall round-trip).
 - Strength routines have a weekly schedule that drives a Today indicator and pre-selects the right routine when you log a session.
 - Per-exercise trends show top weight + est. 1RM with honest empty/sparse states and raw-sets disclosure.
+- Vitals + sleep + BP are visible as a first-class tab with honest gaps for missing data.
 
-What's left is all Tier 3 — nothing blocking the daily-driver loop. Pick when motivated:
+The Health-data layer is now FLOWING — every datapoint the v2.4 dashboard / rating idea would summarize is queryable. v2.3 (medical import / lab data) is still the cleanest non-Tier-3 candidate before v2.4 if you go that route. What's left otherwise is all Tier 3 — nothing blocking the daily-driver loop. Pick when motivated:
 
 1. **Recipe support** — single new `@Model` for a saved meal of multiple FoodEntry rows. Bundle with the next schema window if more items accumulate.
 
