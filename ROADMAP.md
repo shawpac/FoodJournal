@@ -1,10 +1,23 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.0.1. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.1a. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.1a — Strength routines + sessions + daily reps tracker (schema change)
+
+**The first non-food fitness logging surface. 7 new @Models — the schema's first @Relationship cascades. The v2.0.1 CSV import did its job: the reinstall round-trip recovered every food/water/weight row.**
+
+- ✅ 7 new `@Model` types in `Models/Models.swift`: `ExerciseRepEntry`, `StretchDay`, `StrengthRoutine`, `RoutineExercise`, `StrengthSession`, `LoggedExercise`, `LoggedSet`. SwiftData container now holds 14 model types total.
+- ✅ First @Relationship cascades in the project — two-level nested on the strength side: `StrengthSession → LoggedExercise → LoggedSet`, with both relationship lines declaring `inverse:` on the parent side and the child carrying the back-pointer.
+- ✅ `LoggedExercise` stores the exercise NAME as a String snapshot, NOT a relationship to RoutineExercise. Editing or deleting a routine doesn't retroactively change session history. Targets are display-only hints during logging — never copied into stored LoggedSet values.
+- ✅ Workouts tab extended with two new sections (composable structure preserved from v2.0):
+  - **Daily**: pushup/situp append cards with running sum, custom-count field, Log button; long-press the count → individual-burst manager (DailyRepsSheet) with swipe-delete + 5s undo (mirrors WaterEntriesSheet exactly). Stretched-today binary toggle creates-or-toggles the day's StretchDay row.
+  - **Strength**: nav rows for Routines (list + create + edit + delete templates), Log a session (pick routine or blank, pre-fill exercises with target hints, add sets one at a time), History (reverse-chrono list + read-only SessionDetailView, cascade-safe soft-delete with 5s undo).
+- ✅ **NO HealthKit writes from any of these models.** Strength has no HK schema, and the user's Apple Watch already captures calorie burn passively — writing strength workouts would double-count against Today's energy strip. Daily-tracker data has no HK type either. All v2.1a data is in-app only by design.
+- ✅ Schema change → reinstall. Tested via the v2.0.1 CSV export/reinstall/import round-trip with green Imported-N results for food/water/weight and round-trip nil-not-zero verified.
 
 ### v2.0.1 — CSV import (de-risks future schema-change reinstalls)
 
@@ -203,17 +216,18 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.0.1. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks future schema reinstalls via CSV import. The daily-driver loop is genuinely tight:
+The app is in a great place at v2.1a. Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health read loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a adds the first non-food fitness logging surface (daily reps tracker + strength routines/sessions/history). The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.
 - Trends shows longitudinal weight, macros, distribution by meal, per-nutrient averages, and energy.
-- Apple Health mirrors everything (and now reads workouts + energy); reminders nudge from outside the app.
+- Apple Health mirrors food/water/weight TO Health and reads workouts + energy FROM Health; reminders nudge from outside the app.
 - Reinstalls are no longer lossy — export then import.
+- Strength + daily reps + stretch tracking are logged and persisted (verified across force-quit and a full reinstall round-trip).
 
-**v2.1 is in progress** (session-tracked; not detailed here):
-- **v2.1a** — schema for daily bodyweight tracker (pushups/situps/stretching) and strength-training routines + logging. Will be a schema-change session; bundle anything pending. CSV import (v2.0.1) is the safety net for the reinstall.
-- **v2.1b** — schedule view + Trends integration for the v2.1a data.
+**v2.1b is what's next** (schema-clean now that v2.1a defined the full strength schema upfront):
+- **Day-of-week schedule editor.** UI for "Mon/Wed/Fri = Push day A, Tue/Thu = Pull day A" — surfaces a routine suggestion on the Workouts tab matching today's weekday.
+- **Strength trends.** A new section in TrendsView aggregating LoggedSet weight/reps over time per exercise (or per routine). 1RM estimates / per-exercise progression charts / volume-per-week aggregates — pick whichever surfaces the actual question Mike wants to answer once he has a few weeks of session data.
 
 Beyond v2.1:
 
