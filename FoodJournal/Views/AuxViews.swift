@@ -575,6 +575,7 @@ struct SettingsView: View {
 
     @State private var showingNutrientGoals = false
     @State private var showingCSVExport = false
+    @State private var showingCSVImport = false
     @State private var showingAnthropicSheet = false
     @State private var showingUSDASheet = false
 
@@ -814,6 +815,22 @@ struct SettingsView: View {
                     }
 
                     Button {
+                        showingCSVImport = true
+                    } label: {
+                        HStack {
+                            Text("Import data")
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Text("CSV")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    Button {
                         libraryCount = countLibrary()
                         showingResetLibraryAlert = true
                     } label: {
@@ -879,6 +896,9 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showingCSVExport) {
                 CSVExportSheet()
+            }
+            .sheet(isPresented: $showingCSVImport) {
+                CSVImportSheet()
             }
             .sheet(isPresented: $showingAnthropicSheet, onDismiss: reload) {
                 AnthropicKeySheet()
