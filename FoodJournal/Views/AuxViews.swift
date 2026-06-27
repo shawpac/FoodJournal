@@ -123,7 +123,13 @@ struct ConfirmFoodView: View {
 
             Section("Serving") {
                 HStack {
-                    Text("Grams")
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Grams")
+                        Text("edit for actual weight")
+                            .font(.caption2)
+                            .italic()
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     TextField("g", value: $grams, format: .number)
                         .keyboardType(.decimalPad)
