@@ -43,6 +43,17 @@ struct HealthMetricsView: View {
                             .buttonStyle(.plain)
                         }
                     }
+
+                    // v2.3a — Lab results entry. Pushes the labs surface
+                    // (panels, manual entry, photo import, marker trends).
+                    sectionHeader("Lab results")
+                    NavigationLink {
+                        LabsView()
+                    } label: {
+                        labsEntryRow
+                    }
+                    .buttonStyle(.plain)
+
                     disclaimerFooter
                 }
                 .padding()
@@ -233,6 +244,33 @@ struct HealthMetricsView: View {
             .foregroundStyle(.secondary)
             .textCase(.uppercase)
             .padding(.leading, 4)
+    }
+
+    /// v2.3a entry row pushing LabsView. Single tappable card matching the
+    /// rest of the dashboard style.
+    private var labsEntryRow: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "doc.text.magnifyingglass")
+                .foregroundStyle(.orange)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Lab results")
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text("Manual entry + photo import. Display only — no medical interpretation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground),
+                    in: RoundedRectangle(cornerRadius: 14))
     }
 
     private var disclaimerFooter: some View {

@@ -737,3 +737,135 @@ final class LoggedSet {
     }
 }
 
+// MARK: - v2.3a — Lab results (medical data)
+//
+// SAFETY: the app DISPLAYS and FLAGS, it does NOT INTERPRET. Every LabResult
+// stores the value, unit, and the lab's OWN stated reference range as printed,
+// and the UI shows a neutral in/out-of-range indicator derived from THAT
+// range. The app must NEVER tell the user what an abnormal value means,
+// whether to worry, what action to take, or offer any medical opinion.
+//
+// NIL ≠ 0 is especially critical here: a fake 0 substituted for an absent
+// value could read as a catastrophic result. Value, unit, and both reference
+// bounds are independently optional. A result with a value but no range
+// stores nil bounds and shows NO flag — not a guessed one.
+//
+// Apple Health clinical records (FHIR / HKClinicalType) is INTENTIONALLY OUT
+// OF SCOPE in v2.3a — that's the v2.3b follow-up. v2.3a only covers manual
+// entry + Claude-vision photo extraction (with mandatory human review).
+
+// MARK: LabPanel (one imported panel / report — a single blood draw or visit)
+/// One imported lab report. Owns its LabResults via cascade — same pattern as
+/// v2.1a's StrengthSession → LoggedExercise → LoggedSet two-level cascade.
+@Model
+final class LabPanel {
+    var panelID: UUID
+    var collectedDate: Date
+    /// Free-form provenance: "LabCorp" / "Quest" / "PCP" / "manual" / "photo".
+    var source: String
+    var importedAt: Date
+    var pendingDeleteAt: Date?
+
+    /// Cascade: deleting a panel deletes its results. Inverse declared here so
+    /// LabResult.panel resolves automatically — same pattern as
+    /// StrengthSession.exercises and StrengthRoutine.exercises.
+    @Relationship(deleteRule: .cascade, inverse: \LabResult.panel)
+    var results: [LabResult] = []
+
+    init(panelID: UUID = UUID(),
+         collectedDate: Date,
+         source: String,
+         importedAt: Date = .now,
+         pendingDeleteAt: Date? = nil) {
+        self.panelID = panelID
+        self.collectedDate = collectedDate
+        self.source = source
+        self.importedAt = importedAt
+        self.pendingDeleteAt = pendingDeleteAt
+    }
+}
+
+// MARK: LabResult (one test within a panel)
+/// One test row inside a panel. Generic-by-design — every field is optional
+/// except testName + normalizedName + order, so any test on any panel fits.
+///
+/// `normalizedName` is the lowercased / punctuation-and-whitespace-stripped
+/// key for matching the SAME marker across panels. Trends group by this key
+/// (with the v2.3a manual-merge alias layer for non-exact matches like
+/// "HbA1c" vs "Hemoglobin A1c"). v2.3b will add a `loincCode` populated from
+/// FHIR; in v2.3a it's nil for everything.
+///
+/// `value` is the numeric result. `valueText` is for qualitative results
+/// ("Negative", "Detected", "<0.1", ">100") that must NEVER be coerced to a
+/// number. The two are mutually exclusive on a row — UI uses whichever is
+/// non-nil. Nil-and-nil means the row is incomplete; UI shows "–".
+///
+/// Reference range follows the same pattern: `refRangeLow` + `refRangeHigh`
+/// are the simple numeric case; `refRangeText` preserves verbatim non-simple
+/// ranges ("<5.7", "Negative"). A result with NO range information stores
+/// all three as nil and shows NO flag in the UI — never a guessed one.
+@Model
+final class LabResult {
+    var testName: String
+    var normalizedName: String
+    var loincCode: String?
+    var value: Double?
+    var valueText: String?
+    var unit: String?
+    var refRangeLow: Double?
+    var refRangeHigh: Double?
+    var refRangeText: String?
+    var order: Int
+    /// External record ID for dedupe. v2.3a uses this for the FHIR Observation
+    /// `id` field from `HKClinicalRecord` imports (Apple Health Records). Nil
+    /// for manual + photo entries. Re-importing from Apple Health checks this
+    /// to skip rows already loaded — provider re-syncs deliver the same id.
+    var fhirID: String?
+    /// Back-pointer to the owning panel.
+    var panel: LabPanel?
+
+    init(testName: String,
+         normalizedName: String,
+         loincCode: String? = nil,
+         value: Double? = nil,
+         valueText: String? = nil,
+         unit: String? = nil,
+         refRangeLow: Double? = nil,
+         refRangeHigh: Double? = nil,
+         refRangeText: String? = nil,
+         order: Int = 0,
+         fhirID: String? = nil) {
+        self.testName = testName
+        self.normalizedName = normalizedName
+        self.loincCode = loincCode
+        self.value = value
+        self.valueText = valueText
+        self.unit = unit
+        self.refRangeLow = refRangeLow
+        self.refRangeHigh = refRangeHigh
+        self.refRangeText = refRangeText
+        self.order = order
+        self.fhirID = fhirID
+    }
+}
+
+// MARK: Lab marker normalization
+/// Computes the matching key for grouping LabResults across panels by marker.
+/// Strategy: lowercase + drop everything that isn't a–z 0–9. So "HbA1c",
+/// "HB A1C", and "Hb-A1c" all collapse to "hba1c" and auto-merge in trends.
+/// Differently-named tests ("Hemoglobin A1c" → "hemoglobina1c") still split
+/// into separate trends until the user merges them via the manual merge tool.
+///
+/// AUTO-MERGE BY EXACT NORMALIZED MATCH ONLY. A wrong auto-merge (two
+/// different tests on one trend) is worse than a split. Manual merges via the
+/// v2.3a alias layer are the only path for non-identical normalized names.
+enum LabMarker {
+    static func normalize(_ s: String) -> String {
+        let lowered = s.lowercased()
+        let scalars = lowered.unicodeScalars.filter {
+            CharacterSet.alphanumerics.contains($0)
+        }
+        return String(String.UnicodeScalarView(scalars))
+    }
+}
+

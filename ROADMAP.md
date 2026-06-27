@@ -1,10 +1,44 @@
 # FoodJournal — Roadmap
 
-A pragmatic, ranked plan for what comes after v2.2.2. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
+A pragmatic, ranked plan for what comes after v2.3a. Higher items have higher value-per-hour-of-work; lower items are nice but optional. Priorities reflect real friction Mike hits using the app, not just feature wishlist.
 
 ---
 
 ## Recently shipped
+
+### v2.3a — Lab results: manual entry + photo transcription + per-marker trends
+
+**First medical-data surface. Display & flag only — the app never interprets. Schema change → reinstall required. TWO import paths: manual, and photo (Claude transcribes + mandatory human review). Direct Apple Health Records / FHIR ingestion was scoped in but pulled — free dev team can't sign the required `health-records` entitlement (see v2.3b below).**
+
+- ✅ Two new `@Model` types: `LabPanel` (collectedDate, source, importedAt, pendingDeleteAt, cascade-owns LabResult) and `LabResult` (testName, normalizedName, loincCode?, value?, valueText?, unit?, refRangeLow?, refRangeHigh?, refRangeText?, order, fhirID? — kept on the schema for the eventual paid-membership FHIR ingestion path). Container goes from 14 → 16 model types. Third nested cascade in the schema (after v2.1a's two strength cascades).
+- ✅ **Safety rule baked into the architecture (non-negotiable):** the app DISPLAYS values and FLAGS them against the LAB'S OWN PRINTED REFERENCE RANGE. It does NOT INTERPRET — no commentary on what abnormal values might mean, no medical advice, no app-invented ranges, no "high"/"low"/"elevated"/"concerning" language. The single out-of-range indicator string anywhere is "out of range" — neutral, factual. A result with no printed numeric range shows NO flag, never a guessed one. Applies equally to both import paths.
+- ✅ **No unit conversion ever** — mg/dL stays mg/dL, mmol/L stays mmol/L. Converting medical values is dangerous and out of scope.
+- ✅ **Nil ≠ 0 is critical here** — a fake 0 substituted for an absent value could read as a catastrophic result. Every optional field on LabResult stays nil when absent. `valueText` is for qualitative results ("Negative", "Detected", "<0.1", ">100") that must NEVER be coerced to a number.
+- ✅ New "Lab results" entry row on the Health Data tab below the vital-tile grid pushes `LabsView` — the labs surface root with both add paths.
+- ✅ **Manual entry** (`LabPanelManualSheet`): pick date + source → add result rows with all fields editable. Save commits the panel + results.
+- ✅ **Photo / PDF import** (`LabPhotoImportSheet`): three entry points on one sheet — camera, Photos picker, OR a PDF file picker. Image-mode goes through `ClaudeVisionService.extractLabReport(image:)`; PDF-mode through `extractLabReport(pdfData:)` (Claude's `document` content type, native multi-page handling up to 32 MB / 100 pages). Both paths share a `performLabExtraction` helper for request/retry plumbing. Transcription-only prompt — no interpretation, no unit conversion, no invented ranges. max_tokens 8192 for multi-page coverage. Lands on the **mandatory editable review screen** with a prominent "AI-extracted — verify against your report before saving" banner. Every field editable, rows can be deleted or added. Save commits only the reviewed version. **Nothing extracted by Claude ever persists directly.** The PDF path is the workaround for the absent direct FHIR ingestion — export PDF from Apple Health → Browse → Lab Results → Share → PDF and import directly.
+- ❌ **Direct Apple Health Records (FHIR) ingestion — PULLED.** Scoped, built, and reverted: `com.apple.developer.healthkit.access = ["health-records"]` is gated by Apple at the App ID level just like CloudKit. On the free dev team this project uses, the provisioning profile signing fails outright. Even on a paid Developer Program account, the entitlement requires a per-bundle-ID "Request Access" approval from Apple. v2.3b is reserved for restoring this surface if/when paid membership lands. The screenshot-the-Health-app + photo-import workaround covers the same use case in the meantime.
+- ✅ **Panel detail** (`LabPanelDetailView`) lists every result with value (or qualitative text), unit, range (when printed), and the neutral colored dot — green when value is inside the printed numeric range, orange "out of range" otherwise, nothing at all when no numeric range is printed. Header footer reiterates the display-not-interpret rule.
+- ✅ **Marker trends** (`LabMarkerPickerView` → `LabMarkerTrendView`): auto-group by `LabMarker.normalize(testName)` (lowercase + strip non-alphanumerics) so "HbA1c" / "Hb-A1c" / "HB A1C" → "hba1c" all merge automatically. Swift Charts line + point chart of numeric samples over time. Shaded green band shows the printed reference range ONLY when every plotted point's range agrees strictly — when ranges vary or are absent, no band drawn and the footer says why. Qualitative samples listed below, not charted.
+- ✅ **Marker merge tool** (`LabMarkerMergeSheet`): for differently-named tests that mean the same marker (Hemoglobin A1c ↔ HbA1c), select two or more, pick one as canonical, others alias to it. Auto-merge is intentionally limited to exact-after-normalization matches because a wrong merge (two distinct tests on one trend) is worse than a split. Storage is `@AppStorage("labMarkerAliases")` JSON `[String: String]` map — lighter than a 17th @Model.
+- ✅ **Soft delete** on panels with 5-second undo. Cascade fires through to LabResults only on commit, matching the rest of the app.
+- ✅ Reuses `CameraPicker` from PhotoLogSheet and `KeychainStore.loadAPIKey()` for the Anthropic key (existing key works — no new key surface).
+
+### v2.2.3 — CSV export + import for strength and daily-tracker tables
+
+**Closes the v2.0.1 gap: the last unprotected models (strength sessions, strength routines, daily reps, stretch days) are now reinstall-survivable. Future schema-change reinstalls won't drop any data.**
+
+- ✅ Four new CSV files alongside the existing food/water/weight/energy outputs in `CSVExportSheet`:
+  - **`strength-sessions.csv`** — one row per LoggedSet, flattening the two-level cascade (StrengthSession → LoggedExercise → LoggedSet) unambiguously. Columns: `session_date, session_time, routine_name, duration_minutes, exercise_name, exercise_order, set_number, weight_lbs, reps`.
+  - **`strength-routines.csv`** — one row per RoutineExercise template line. Columns: `routine_name, routine_order, created_at, exercise_name, exercise_order, target_sets, target_reps, target_weight_lbs`. **Routines export in FULL regardless of the date-range picker** (templates aren't events; losing old routines to a short range would be unhelpful after a reinstall).
+  - **`rep-entries.csv`** — pushups / situps bursts. Columns: `date, time, kind, count`.
+  - **`stretch-days.csv`** — daily binary. Columns: `date, stretched`.
+- ✅ Zero-set exercises and zero-exercise routines are NOT exported. Matches LogSessionSheet's save-time skip behavior; if one somehow exists from manual edits, it round-trips as omitted.
+- ✅ `CSVImportSheet` extended with four new file kinds, all detected by header-sniff (renamed files still work). Per-type empty-table guard each (StrengthRoutine + StretchDay have no soft-delete column, so any row counts). Same RFC 4180 quoting, POSIX `yyyy-MM-dd` / `HH:mm` formatters, append-only contract as v2.0.1.
+- ✅ Strength session import groups flattened rows back into the two-level cascade by (`session_date, session_time, routine_name, duration_minutes`) at the session level, then (`exercise_name, exercise_order`) within a session. Strength routine import groups by (`routine_name, routine_order, created_at`).
+- ✅ Nil ≠ 0 enforced for every optional column: `weight_lbs`, `reps`, `target_sets`, `target_reps`, `target_weight_lbs`, `duration_minutes`, `routine_name`. Required fields (`set_number`, `exercise_order`, `count`, `stretched`) mark the row malformed and skip it.
+- ✅ Imports do NOT touch HealthKit (the v2.1a "in-app only" rule) and do NOT call any upserter (no LibraryFood analog exists for these models).
+- ✅ Schema-clean. View-only changes — extends two existing files.
 
 ### v2.2.2 — Typed-context field on photo estimate
 
@@ -255,6 +289,20 @@ Worth doing only if Mike (a) actually starts using a second Apple device, or (b)
 
 ### Tier 3 — polish & new capabilities
 
+**v2.3b — Apple Health Records (FHIR) ingestion — paid-membership only**
+
+The direct Health → MS Fitness FHIR pipe was scoped + implemented in v2.3a then PULLED because the `com.apple.developer.healthkit.access = ["health-records"]` entitlement requires the paid Apple Developer Program ($99/yr) PLUS a per-bundle-ID "Request Access" approval from Apple. The free dev team this project runs on can't sign with it (`"Personal development teams … do not support the HealthKit Access (Verifiable Health Records) capability"`).
+
+If/when paid membership lands, v2.3b restores:
+- `Services/ClinicalLabImporter.swift` (`HealthService` extension exposing `requestClinicalLabAuthorization()`, `fetchClinicalLabResults()`, FHIR R4 Observation Decodable shapes).
+- `Views/HealthLabImportSheet.swift` (auth → fetch → group by (date, source) → preview with skippable panels → commit, deduping by `LabResult.fhirID`).
+- The "Import from Apple Health" entry row on `LabsView`.
+- The `com.apple.developer.healthkit.access = ["health-records"]` entitlement in `FoodJournal.entitlements` and `NSHealthClinicalHealthRecordsShareUsageDescription` privacy string in `project.pbxproj`.
+
+All four chunks of work are documented in the v2.3a commit pre-rip-out in git history and can be reverted in. `LabResult.fhirID` is already on the schema waiting.
+
+Possible follow-ons after v2.3b ships: extend the same plumbing to `.diagnosticReportRecord` (better panel names than just provider source) and to other clinical types — medications, conditions, allergies, immunizations, procedures. Each would get its own @Model + parallel surface on the Health Data tab. Same display-and-flag-only rule applies throughout.
+
 **Recipe support**
 
 "I made stir-fry with chicken, rice, broccoli, soy sauce." Save the combination as a named recipe so you can log it as one item next time. Simplest model: a recipe is just a saved meal of multiple FoodEntry rows that get inserted together. ~1.5h.
@@ -285,7 +333,7 @@ Paid Apple Developer account ($99/year), App Store Connect setup, screenshots, p
 
 ## What I'd do next
 
-The app is in a great place at v2.2.2. **The v2.1 strength feature set is fully done**, **v2.2 closed the read-side Apple Health loop**, **v2.2.1 fixed USDA's thin packaged-food coverage by adding Open Food Facts as a second text-search source**, and **v2.2.2 lets the user feed Claude typed context (weights / brands / prep notes) to refine photo estimates.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import; v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs; v2.2.1 added OFF text search with merge + dedupe + source tags; v2.2.2 added the photo-context field. The daily-driver loop is genuinely tight:
+The app is in a great place at v2.3a. **The v2.1 strength feature set is fully done**, **v2.2 closed the read-side Apple Health loop**, **v2.2.1 fixed USDA's thin packaged-food coverage by adding Open Food Facts as a second text-search source**, **v2.2.2 lets the user feed Claude typed context (weights / brands / prep notes) to refine photo estimates**, **v2.2.3 extended CSV export + import to the strength + daily-tracker tables — every persisted model except the cache tables is now reinstall-survivable**, and **v2.3a opens the medical-data surface with two import paths (manual entry + Claude-vision photo transcription with mandatory human review) + per-marker trends, governed by the strict display-and-flag-only rule. Apple Health Records / FHIR ingestion was scoped + built in v2.3a then pulled because the free dev team can't sign the required entitlement — see v2.3b for the restoration plan when/if paid membership lands.** Tier 1 + Tier 2 (minus iCloud) are fully shipped; v1.9 closed the Apple Health write loop; v2.0 added Workouts and renamed the app; v2.0.1 unblocks schema-change reinstalls via CSV import (food/water/weight); v2.1a–b added the full strength + daily-tracker surface; v2.2 added vitals + sleep + BP and consolidated the tab bar to 5 tabs; v2.2.1 added OFF text search with merge + dedupe + source tags; v2.2.2 added the photo-context field; v2.2.3 closes the CSV gap. The daily-driver loop is genuinely tight:
 - Logging is one tap (Most Used / suggestion banner / SearchSheet swipe-add) or a guided flow.
 - Past-day support works end-to-end with proper time fidelity.
 - Editing is fully flexible — every field, date, time, plus delete-with-undo.

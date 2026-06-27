@@ -348,6 +348,200 @@ enum ClaudeVisionService {
             return false
         }
     }
+
+    // MARK: - v2.3a — Lab report transcription
+    //
+    // SAFETY: this is a TRANSCRIPTION path, not an interpretation path. The
+    // prompt forbids medical commentary, unit conversion, and inventing
+    // reference ranges. Extracted output is NEVER saved directly — the UI
+    // surfaces an editable review screen and only the user's confirmed
+    // version persists.
+
+    struct ExtractedLabReport: Decodable {
+        let collected_date: String?  // "YYYY-MM-DD" or null
+        let source: String?           // lab name printed on the report, if visible
+        let results: [ExtractedLabResult]
+    }
+
+    struct ExtractedLabResult: Decodable {
+        let test_name: String
+        let value: Double?
+        let value_text: String?
+        let unit: String?
+        let ref_range_low: Double?
+        let ref_range_high: Double?
+        let ref_range_text: String?
+    }
+
+    private static let labExtractionPrompt: String = [
+        "Transcribe the lab test results from this image of a lab report (or page of one).",
+        "",
+        "Return ONLY a JSON object — no markdown, no prose — with this exact shape:",
+        "{",
+        "  \"collected_date\": \"YYYY-MM-DD\" or null,",
+        "  \"source\": \"lab name printed on the report (e.g. LabCorp, Quest)\" or null,",
+        "  \"results\": [",
+        "    {",
+        "      \"test_name\": \"exact name as printed (e.g. Hemoglobin A1c)\",",
+        "      \"value\": numeric result or null,",
+        "      \"value_text\": \"qualitative result (e.g. Negative, Detected, <0.1, >100)\" or null,",
+        "      \"unit\": \"exact unit as printed (mg/dL, %, mmol/L, ng/mL, etc.)\" or null,",
+        "      \"ref_range_low\": numeric lower bound or null,",
+        "      \"ref_range_high\": numeric upper bound or null,",
+        "      \"ref_range_text\": \"verbatim non-simple range (e.g. <5.7, Negative)\" or null",
+        "    }",
+        "  ]",
+        "}",
+        "",
+        "CRITICAL TRANSCRIPTION RULES — read carefully:",
+        "- Transcribe EXACTLY what is printed. Do NOT infer, normalize, or interpret values.",
+        "- Do NOT convert units. If the page says \"mg/dL\", return \"mg/dL\" — never convert to mmol/L or anything else.",
+        "- Do NOT add reference ranges that are not printed on the page. If a test has no range printed,",
+        "  return null for ALL of ref_range_low, ref_range_high, and ref_range_text. Do NOT consult",
+        "  medical knowledge for ranges — only what is visible on the page.",
+        "- For numeric ranges printed as \"low – high\" or \"low - high\" or \"low to high\",",
+        "  fill ref_range_low and ref_range_high. For ranges like \"<5.7\", \">10\", \"Negative\",",
+        "  or any non-low–high format, put the verbatim text in ref_range_text and leave",
+        "  ref_range_low and ref_range_high null.",
+        "- For qualitative results (\"Negative\", \"Detected\", \"Positive\", \"None\"), put the text in value_text",
+        "  and leave value null. NEVER coerce a qualitative result to 0 or 1.",
+        "- For numeric values printed as \">100\" or \"<0.1\", put the verbatim text in value_text and",
+        "  leave value null. A bounded value cannot be transcribed as a plain number.",
+        "- If you cannot read a field clearly, return null for that field. Do NOT guess.",
+        "- Skip any test row where you cannot read the test name. Do NOT invent placeholder names.",
+        "",
+        "This is transcription only. Make NO medical interpretation. Do NOT comment on whether",
+        "values are high or low, normal or abnormal, or what they might mean — the app will compare",
+        "values to the printed reference ranges itself and present a neutral indicator. Anything",
+        "beyond literal transcription is out of scope."
+    ].joined(separator: "\n")
+
+    /// Send a photo of a lab report to Claude for STRUCTURED TRANSCRIPTION
+    /// (not interpretation). Output populates an editable review screen —
+    /// nothing extracted here is ever persisted directly.
+    /// Reuses `prepareImage` and the v1.4 API plumbing patterns from
+    /// `estimate(images:userContext:apiKey:)`.
+    static func extractLabReport(image: UIImage, apiKey: String) async throws -> ExtractedLabReport {
+        print("ClaudeVisionService: starting lab extraction (image), key length \(apiKey.count)")
+        guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey }
+        guard let prepared = prepareImage(image) else { throw ServiceError.imageEncodingFailed }
+        let content: [[String: Any]] = [
+            [
+                "type": "image",
+                "source": [
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": prepared.jpeg.base64EncodedString()
+                ]
+            ],
+            ["type": "text", "text": labExtractionPrompt]
+        ]
+        return try await performLabExtraction(content: content, apiKey: apiKey)
+    }
+
+    /// v2.3a — PDF variant. Sends the raw PDF bytes to Claude via the
+    /// `document` content type (supported on Sonnet 3.5+ / Sonnet 4.x). The
+    /// model reads multi-page lab reports natively without us rasterizing
+    /// each page first. Same transcription-only contract as the image path:
+    /// output populates an editable review screen, never persists directly.
+    /// Apple Health → Browse → Lab Results → Share → PDF lands here.
+    static func extractLabReport(pdfData: Data, apiKey: String) async throws -> ExtractedLabReport {
+        print("ClaudeVisionService: starting lab extraction (PDF), key length \(apiKey.count), bytes \(pdfData.count)")
+        guard !apiKey.isEmpty else { throw ServiceError.missingAPIKey }
+        guard !pdfData.isEmpty else { throw ServiceError.imageEncodingFailed }
+        let content: [[String: Any]] = [
+            [
+                "type": "document",
+                "source": [
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "data": pdfData.base64EncodedString()
+                ]
+            ],
+            ["type": "text", "text": labExtractionPrompt]
+        ]
+        return try await performLabExtraction(content: content, apiKey: apiKey)
+    }
+
+    /// Shared request/response/retry plumbing for both image and PDF lab
+    /// extraction. max_tokens 8192 to cover multi-page panels with 30+ tests
+    /// (Anthropic only bills for output tokens used, not the max).
+    private static func performLabExtraction(content: [[String: Any]], apiKey: String) async throws -> ExtractedLabReport {
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 8192,
+            "messages": [["role": "user", "content": content]]
+        ]
+
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // PDFs can be 32MB / 100 pages — give the request room.
+        request.timeoutInterval = 180
+
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 180
+        config.timeoutIntervalForResource = 240
+        config.waitsForConnectivity = true
+        let session = URLSession(configuration: config)
+
+        var lastError: Error?
+        for attempt in 1...3 {
+            print("ClaudeVisionService: lab extract attempt \(attempt)")
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw ServiceError.networkError("response was not HTTP")
+                }
+                let bodyText = String(data: data, encoding: .utf8) ?? "<binary>"
+                print("ClaudeVisionService: HTTP \(http.statusCode), body length \(data.count)")
+
+                guard (200..<300).contains(http.statusCode) else {
+                    throw ServiceError.badResponse(http.statusCode, bodyText)
+                }
+
+                guard
+                    let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                    let respContent = json["content"] as? [[String: Any]],
+                    let text = respContent.first(where: { ($0["type"] as? String) == "text" })?["text"] as? String
+                else {
+                    throw ServiceError.parseFailed("no text block in response. Body: \(String(bodyText.prefix(300)))")
+                }
+
+                let cleaned = text
+                    .replacingOccurrences(of: "```json", with: "")
+                    .replacingOccurrences(of: "```", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+
+                guard let jsonData = cleaned.data(using: .utf8) else {
+                    throw ServiceError.parseFailed("could not encode model output")
+                }
+
+                do {
+                    return try JSONDecoder().decode(ExtractedLabReport.self, from: jsonData)
+                } catch {
+                    throw ServiceError.parseFailed("decode error: \(error.localizedDescription) — output was: \(String(cleaned.prefix(500)))")
+                }
+
+            } catch let error as ServiceError {
+                throw error
+            } catch let urlError as URLError where shouldRetry(urlError) {
+                lastError = urlError
+                print("ClaudeVisionService: lab extract transient \(urlError.code.rawValue), will retry")
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 1_000_000_000)
+                continue
+            } catch {
+                throw ServiceError.networkError(error.localizedDescription)
+            }
+        }
+
+        throw ServiceError.networkError(
+            "Network kept dropping after 3 tries. Last error: \(lastError?.localizedDescription ?? "unknown")"
+        )
+    }
 }
 
 fileprivate extension UIImage {

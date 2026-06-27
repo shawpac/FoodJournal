@@ -6,7 +6,7 @@ A personal iOS nutrition + fitness tracker. Display name on the home screen is *
 
 Built collaboratively across multiple sessions — Claude wrote the code, Mike ran it, we iterated on bugs and features in real time.
 
-## Current state (v2.2.2)
+## Current state (v2.3a)
 
 **Working features**
 
@@ -104,7 +104,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Surfaces as the orange banner described above on the Today tab.
 - Toggle in Settings → Smart suggestions → "Suggest your usual." Defaults ON.
 
-*Health Data tab (v2.2)*
+*Health Data tab (v2.2, extended v2.3a)*
 - New 3rd tab, between Workouts and Trends. SF Symbol `heart.text.square`.
 - Read-only Apple Health dashboard. Reads vitals + sleep + blood pressure on demand from HealthKit; nothing is cached locally — same invariant as v1.9 energy and v2.0 workouts.
 - First open requests READ permission for ~12 types at once (sleep, 9 single-value vitals, systolic + diastolic). Reuses the existing `NSHealthShareUsageDescription` privacy string from v1.8.2.
@@ -113,6 +113,19 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - Sleep trend plots nightly asleep duration in hours. BP trend plots systolic + diastolic as two color-coded series.
 - Honest "denial = no data" disclaimer at the bottom: HealthKit hides read-grant status, so a permanently `–` tile may mean either no data exists OR you denied permission. Check the Health app's permission screen if unsure.
 - **Architecture**: a descriptor-driven generic path. `HealthService.healthMetrics: [HealthMetric]` is the single source of truth for the vital list — adding a future metric is a one-line entry. Generic readers `readMetricToday` / `readMetricByDay` dispatch on `MetricAggregation` (`.average` for rate-style metrics; `.sum` for steps; `.latest` for VO2 max + wrist temp). Sleep and BP have bespoke readers because they don't fit the single-value pattern.
+- **v2.3a**: a "Lab results" entry row below the tile grid pushes the labs surface (manual entry, photo import, marker trends, marker merge tool).
+
+*Lab results (v2.3a — medical data; display & flag only, no interpretation)*
+- New surface reached from Health Data → "Lab results." Stores blood-panel-style results from two import paths: manual entry, and photo of a printed report or screenshot (Claude transcribes → mandatory human review → save).
+- **Safety rule (non-negotiable)**: this surface DISPLAYS values and FLAGS them against the lab's OWN printed reference range. It does NOT INTERPRET your results — no commentary on what abnormal values might mean, no medical advice, no app-invented ranges. A result with no printed numeric range shows NO flag, never a guessed one. The single out-of-range indicator string anywhere is "out of range" — neutral, factual.
+- **Manual entry**: pick collected date + source (LabCorp / Quest / PCP / etc.) → add result rows (testName, value or qualitative text, unit, range low/high or text). Save commits the panel + results.
+- **Photo / PDF import**: three entry points on one sheet — take a photo, pick a photo from the library, or pick a **PDF** (e.g. the direct PDF export from Apple Health → Browse → Lab Results → Share → PDF). The app sends the file to Claude with a transcription-only prompt (no interpretation, no unit conversion, no invented ranges) and lands you on a **mandatory editable review screen** showing every extracted row with an "AI-extracted — verify against your report before saving" banner. Every field is editable; misread rows can be deleted; missed rows can be added. Save commits only the reviewed version. **Nothing extracted by Claude ever persists directly.** PDFs are read natively (Claude's `document` content type) — multi-page reports go in one shot, up to 32 MB / 100 pages.
+- **Apple Health Records (FHIR) direct ingestion**: planned for v2.3a but pulled — the `com.apple.developer.healthkit.access = ["health-records"]` entitlement requires a paid Apple Developer Program account ($99/yr) AND a per-bundle-ID approval from Apple. On the free dev team this project uses, the provisioning profile is rejected. Workaround: export the lab panels you want from Apple Health → Browse → Lab Results → Share → PDF and run them through the photo/PDF import path above; Claude transcribes the same FHIR-sourced values. Full FHIR ingestion returns as v2.3b if paid membership ever lands.
+- **Per-panel detail**: lists every result with value (or qualitative text), unit, range (when printed), and a neutral colored dot — green when the numeric value is inside the printed numeric range, orange "out of range" otherwise, nothing at all when no numeric range is printed.
+- **Marker trends**: pick a marker (auto-grouped by `LabMarker.normalize(testName)` — exact-match-on-stripped-name, so "HbA1c" / "Hb-A1c" / "HB A1C" auto-merge). Chart shows numeric samples over time. Shaded green band shows the printed reference range ONLY when every plotted point's range agrees strictly — when ranges vary or are absent, no band is drawn and a footer notes why. Qualitative samples (Negative / Detected / "<0.1") are listed below the chart, never charted.
+- **Marker merge tool**: for differently-named tests that mean the same marker (Hemoglobin A1c ↔ HbA1c), open Merge markers, tap two or more markers, pick one as canonical, the others alias to it. Auto-merge is intentionally limited to exact-after-normalization matches because a wrong merge (two distinct tests on one trend) is worse than a split.
+- **Soft delete on panels**: swipe a panel → 5-second undo toast. Cascade fires through to LabResults only on commit, same pattern as the rest of the app.
+- **Schema**: two new @Models — `LabPanel` (cascade-owns) `LabResult`. Bumps container from 14 to 16 model types. Schema change → reinstall required.
 
 *Workouts tab (v2.0)*
 - 2nd tab in the TabView (since v2.2), between Food and Health Data. SF Symbol `figure.run`.
@@ -153,13 +166,15 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Raw sets per session** listed below the charts so the actual logged data is never hidden behind the estimate. Sets with nil weight or reps display raw (`135 × –`) but are excluded from the trend math.
 - Empty state when no logged sessions exist anywhere.
 
-*CSV import (v2.0.1)*
-- New row in Settings → Data → **Import data** opens a sheet that supports `.fileImporter` for picking any subset of food/water/weight CSVs (renamed files are fine — header is sniffed, not the filename).
-- **Empty-table guard per type:** food/water/weight each require their table to be empty (no non-soft-deleted rows) before that file's import will run. If non-empty, the file is reported as skipped with an orange message and zero rows insert. There is intentionally no dedupe / merge / matching logic.
+*CSV import (v2.0.1, extended v2.2.3)*
+- New row in Settings → Data → **Import data** opens a sheet that supports `.fileImporter` for picking any subset of food / water / weight / **strength sessions / strength routines / rep entries / stretch days** CSVs (renamed files are fine — header is sniffed, not the filename).
+- **Empty-table guard per type:** every supported table must be empty (no non-soft-deleted rows; routines + stretch days have no soft-delete so any row counts) before that file's import will run. If non-empty, the file is reported as skipped with an orange message and zero rows insert. There is intentionally no dedupe / merge / matching logic.
 - **Designed for one purpose**: restoring history after a schema-change reinstall. Use after a fresh app install, never on a populated app.
 - Imported FoodEntry rows call `LibraryFoodUpsert` (rebuilds search library + useCount) and **skip** HealthSync (they're historical restorations, not new logs — would duplicate or orphan HK samples otherwise).
 - Source provenance is preserved per-row from the CSV's source column. Only a blank source cell falls back to `"import"`. So sparkles-icon `source == "suggestion"` rows still render correctly after a round-trip.
-- Nil ≠ 0 round-trip: a food entry with a blank optional nutrient in the CSV (empty cell) parses back to `Double? = nil`, never 0. Blank required fields (name, loggedAt, servings, calories, protein/carbs/fat) mark the row malformed and skip it.
+- Nil ≠ 0 round-trip: a food entry with a blank optional nutrient in the CSV (empty cell) parses back to `Double? = nil`, never 0. Same applies to strength (weight_lbs, reps, target_sets / reps / weight_lbs, duration_minutes, routine_name). Blank required fields (name, loggedAt, servings, calories, protein/carbs/fat, amountOz, weightLbs, set_number, exercise_order, count, stretched) mark the row malformed and skip it.
+- **Strength sessions** are flattened to one row per LoggedSet. Import groups rows back into StrengthSession → LoggedExercise → LoggedSet by (session_date, session_time, routine_name, duration_minutes) at the session level, then (exercise_name, exercise_order) within a session. **Strength routines** are flattened to one row per RoutineExercise; import groups by (routine_name, routine_order, created_at). **Zero-set exercises and zero-exercise routines are not exported and therefore can't be re-imported** — they shouldn't exist in practice (LogSessionSheet skips empty exercises on save).
+- Imported strength / daily-tracker data does NOT touch HealthKit (v2.1a "in-app only" rule).
 - Energy CSV: detected and reported as "not stored locally" since it's read-only from Health.
 
 *Settings*
@@ -171,7 +186,7 @@ Built collaboratively across multiple sessions — Claude wrote the code, Mike r
 - **Reminders** (v1.8.1): per-meal toggle + time picker.
 - **Smart suggestions** (v1.8.6): single toggle.
 - **Apple Health** (v1.8.2 + v1.9): two independent toggles — "Sync to Apple Health" (write food/water/weight) and "Show calories burned" (read active + basal energy). Import weight button visible when sync is on.
-- **Data section:** Export data (food + water + weight CSVs, plus energy.csv when burn-toggle is on), **Import data (v2.0.1)** (restore food/water/weight from CSV — empty-table guarded), Reset food library.
+- **Data section:** Export data (food + water + weight + strength sessions + strength routines + rep entries + stretch days CSVs, plus energy.csv when burn-toggle is on), **Import data (v2.0.1, extended v2.2.3)** (restore all of the above from CSV — empty-table guarded per type), Reset food library.
 - **API keys section:** compact rows with Set/Not set status.
 
 *App icon*
@@ -205,7 +220,7 @@ Critical design choice: optional fields use `Double?`. Empty form fields stay ni
 - @AppStorage / UserDefaults for late-night warning, meal-window config, reminder toggles + times, smart-suggestion toggle, Health sync toggle
 - Git, committed phase by phase via terminal
 
-**Data models (7)**
+**Data models (16 total)**
 - `FoodEntry` — all 19 nutrients + meta (loggedAt, mealType, source, barcode, pendingDeleteAt, healthSampleID JSON)
 - `UserGoals` — daily targets for the 5 main + 14 optional nutrients
 - `CachedFood` — barcode → product cache
@@ -213,6 +228,15 @@ Critical design choice: optional fields use `Double?`. Empty form fields stay ni
 - `CachedPhotoEstimate` — image hash → estimate cache (single + multi-photo combined hashes)
 - `LibraryFood` — passive food library, hybrid per-100g / per-serving storage
 - `WeightEntry` (v1.8) — weightLbs, loggedAt, pendingDeleteAt, healthSampleID, importedFromHealth
+- `ExerciseRepEntry` (v2.1a) — pushup/situp burst (kind, count, loggedAt, pendingDeleteAt)
+- `StretchDay` (v2.1a) — date, stretched
+- `StrengthRoutine` (v2.1a) — name, order, createdAt, cascade-owns RoutineExercise
+- `RoutineExercise` (v2.1a) — target template line (sets/reps/weight optional)
+- `StrengthSession` (v2.1a) — loggedAt, routineName, durationMinutes, pendingDeleteAt, cascade-owns LoggedExercise
+- `LoggedExercise` (v2.1a) — name, order, cascade-owns LoggedSet
+- `LoggedSet` (v2.1a) — weightLbs?, reps?, setNumber
+- `LabPanel` (v2.3a) — collectedDate, source, importedAt, pendingDeleteAt, cascade-owns LabResult
+- `LabResult` (v2.3a) — testName, normalizedName, loincCode?, value?, valueText?, unit?, refRangeLow?, refRangeHigh?, refRangeText?, order, fhirID? (dedupe primitive for Apple Health import)
 
 **Project structure**
 ```
@@ -329,9 +353,10 @@ Plug iPhone in, open the project in Xcode, hit ⌘R.
 
 **Xcode manual setup (already done; for new sessions / fresh checkouts):**
 - HealthKit capability: Signing & Capabilities → `+` Capability → HealthKit.
-- Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Already wired as `INFOPLIST_KEY_*` build settings.
+- **NOT enabled (free dev team blocker):** "Clinical Health Records" sub-capability. Tried during v2.3a development; provisioning profile signing fails on personal teams with the error "Personal development teams do not support the HealthKit Access (Verifiable Health Records) capability." Apple gates this entitlement just like CloudKit. Re-attempt only after paid Developer Program enrollment + per-bundle-ID Apple approval.
+- Info tab → add `Privacy - Health Share Usage Description` and `Privacy - Health Update Usage Description`. Both wired as `INFOPLIST_KEY_*` build settings.
 
-**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, **v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only), v2.2.1 (Open Food Facts text search + merged search results — view + service only), **v2.2.2 (typed-context field on photo estimate — view + service only)** were schema-clean.
+**Schema-change reinstalls.** Anytime fields are added to `@Model` classes, delete the app from your phone (long-press icon → Remove App → Delete App), then run fresh from Xcode. Always export CSV first via Settings → Data → Export. **Then restore via Settings → Data → Import data after the fresh install** — see CSV import below. So far: v1.8, v1.8.2, v2.1a (7 new @Models for strength + daily tracker — first @Relationship cascades in the schema), **v2.3a (2 new @Models for lab panels + results — third nested-cascade pattern; first medical data)** required reinstalls; v1.8.1, v1.8.3, v1.8.4, v1.8.5, v1.8.6, v1.9, v2.0 (Workouts tab + display-name rename), v2.0.1 (CSV import), v2.1a.1 (Apple Fitness split — view-only), v2.1b (strength schedule + per-exercise trends — view + AppStorage only), v2.2 (Health Data tab + tab bar reorg — view + HealthKit reads only), v2.2.1 (Open Food Facts text search + merged search results — view + service only), v2.2.2 (typed-context field on photo estimate — view + service only), v2.2.3 (CSV export + import for strength + daily-tracker tables — extends CSVExportSheet + CSVImportSheet) were schema-clean.
 
 **Project location:** `~/Desktop/my stuff/apps/foodjournal/foodjournal/` (path has a space — shell-quote it).
 
