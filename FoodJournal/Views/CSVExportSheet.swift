@@ -3,8 +3,17 @@ import SwiftData
 import UIKit
 
 // MARK: - CSVExportSheet
-/// Settings → "Export data" → date range → bundle of food.csv + water.csv + weight.csv into share sheet.
-/// Excludes soft-deleted (pendingDeleteAt != nil) food, water, and weight entries.
+/// Settings → "Export data" → date range → bundle of food.csv + water.csv + weight.csv
+/// + (v1.9) energy.csv + (v2.2.3) strength-sessions / strength-routines / rep-entries /
+/// stretch-days CSVs into the share sheet.
+/// Excludes soft-deleted (pendingDeleteAt != nil) food, water, weight, strength-session,
+/// and rep-entry rows. Routines and stretch days have no soft-delete.
+/// Strength sessions are FLATTENED to one row per LoggedSet so the two-level cascade
+/// (session → exercise → set) rebuilds unambiguously on import. Routines are flattened
+/// the same way (one row per RoutineExercise).
+/// Zero-set exercises and zero-exercise routines are NOT exported — both are skipped
+/// at save time elsewhere in the app, so this matches existing behavior. If one somehow
+/// exists (legacy data, manual import edits), it round-trips as omitted.
 /// Nil optional nutrients render as empty cells, never zero — preserves the nil ≠ 0 invariant.
 struct CSVExportSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -53,7 +62,7 @@ struct CSVExportSheet: View {
                     .listRowInsets(EdgeInsets())
                     .listRowBackground(Color.clear)
                 } footer: {
-                    Text("Generates CSV files for food, water, and weight entries, plus an energy file when calories-burned sync is on. Opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
+                    Text("Generates CSV files for food, water, weight, strength sessions + routines, daily reps, and stretch days — plus an energy file when calories-burned sync is on. Opens the share sheet — email, save to Files, AirDrop to your Mac, etc.")
                 }
 
                 if let lastSummary {
@@ -147,9 +156,52 @@ struct CSVExportSheet: View {
             )
             let weights = try context.fetch(weightDescriptor)
 
+            // v2.2.3 — strength + daily-tracker fetches.
+            // Sessions and rep bursts are range-filtered (event-shaped data).
+            // Routines are export-in-full (templates, not events) so the user
+            // doesn't lose old templates after a reinstall just because the
+            // export range was short.
+            // Stretch days are range-filtered by their `date` field.
+            let sessionDescriptor = FetchDescriptor<StrengthSession>(
+                predicate: #Predicate<StrengthSession> { entry in
+                    entry.loggedAt >= rangeStart &&
+                    entry.loggedAt < rangeEnd &&
+                    entry.pendingDeleteAt == nil
+                },
+                sortBy: [SortDescriptor(\.loggedAt)]
+            )
+            let sessions = try context.fetch(sessionDescriptor)
+
+            let routineDescriptor = FetchDescriptor<StrengthRoutine>(
+                sortBy: [SortDescriptor(\.order), SortDescriptor(\.createdAt)]
+            )
+            let routines = try context.fetch(routineDescriptor)
+
+            let repDescriptor = FetchDescriptor<ExerciseRepEntry>(
+                predicate: #Predicate<ExerciseRepEntry> { entry in
+                    entry.loggedAt >= rangeStart &&
+                    entry.loggedAt < rangeEnd &&
+                    entry.pendingDeleteAt == nil
+                },
+                sortBy: [SortDescriptor(\.loggedAt)]
+            )
+            let reps = try context.fetch(repDescriptor)
+
+            let stretchDescriptor = FetchDescriptor<StretchDay>(
+                predicate: #Predicate<StretchDay> { entry in
+                    entry.date >= rangeStart && entry.date < rangeEnd
+                },
+                sortBy: [SortDescriptor(\.date)]
+            )
+            let stretchDays = try context.fetch(stretchDescriptor)
+
             let foodCSV = buildFoodCSV(from: foods)
             let waterCSV = buildWaterCSV(from: waters)
             let weightCSV = buildWeightCSV(from: weights)
+            let sessionsCSV = buildStrengthSessionsCSV(from: sessions)
+            let routinesCSV = buildStrengthRoutinesCSV(from: routines)
+            let repsCSV = buildRepEntriesCSV(from: reps)
+            let stretchCSV = buildStretchDaysCSV(from: stretchDays)
 
             // v1.9 — energy.csv only when the toggle is on. Health reads are
             // async so we await them; the rest of the export stays sync.
@@ -177,18 +229,31 @@ struct CSVExportSheet: View {
             let waterURL = tmp.appendingPathComponent("FoodJournal-water-\(startStr)-to-\(endStr).csv")
             let weightURL = tmp.appendingPathComponent("FoodJournal-weight-\(startStr)-to-\(endStr).csv")
             let energyURL = tmp.appendingPathComponent("FoodJournal-energy-\(startStr)-to-\(endStr).csv")
+            let sessionsURL = tmp.appendingPathComponent("FoodJournal-strength-sessions-\(startStr)-to-\(endStr).csv")
+            let routinesURL = tmp.appendingPathComponent("FoodJournal-strength-routines-\(startStr)-to-\(endStr).csv")
+            let repsURL = tmp.appendingPathComponent("FoodJournal-rep-entries-\(startStr)-to-\(endStr).csv")
+            let stretchURL = tmp.appendingPathComponent("FoodJournal-stretch-days-\(startStr)-to-\(endStr).csv")
 
             // Overwrite if a previous export with the same range is still in tmp
             try? FileManager.default.removeItem(at: foodURL)
             try? FileManager.default.removeItem(at: waterURL)
             try? FileManager.default.removeItem(at: weightURL)
             try? FileManager.default.removeItem(at: energyURL)
+            try? FileManager.default.removeItem(at: sessionsURL)
+            try? FileManager.default.removeItem(at: routinesURL)
+            try? FileManager.default.removeItem(at: repsURL)
+            try? FileManager.default.removeItem(at: stretchURL)
 
             try foodCSV.write(to: foodURL, atomically: true, encoding: .utf8)
             try waterCSV.write(to: waterURL, atomically: true, encoding: .utf8)
             try weightCSV.write(to: weightURL, atomically: true, encoding: .utf8)
+            try sessionsCSV.write(to: sessionsURL, atomically: true, encoding: .utf8)
+            try routinesCSV.write(to: routinesURL, atomically: true, encoding: .utf8)
+            try repsCSV.write(to: repsURL, atomically: true, encoding: .utf8)
+            try stretchCSV.write(to: stretchURL, atomically: true, encoding: .utf8)
 
-            var items: [URL] = [foodURL, waterURL, weightURL]
+            var items: [URL] = [foodURL, waterURL, weightURL,
+                                sessionsURL, routinesURL, repsURL, stretchURL]
             if let energyCSV {
                 try energyCSV.write(to: energyURL, atomically: true, encoding: .utf8)
                 items.append(energyURL)
@@ -196,6 +261,8 @@ struct CSVExportSheet: View {
             shareItems = items
 
             var summary = "Prepared \(foods.count) food + \(waters.count) water + \(weights.count) weight entries."
+            summary += " Strength: \(sessions.count) session\(sessions.count == 1 ? "" : "s"), \(routines.count) routine\(routines.count == 1 ? "" : "s")."
+            summary += " Daily: \(reps.count) rep burst\(reps.count == 1 ? "" : "s"), \(stretchDays.count) stretch day\(stretchDays.count == 1 ? "" : "s")."
             if energyCSV != nil {
                 summary += " Energy: \(energyDayCount) day\(energyDayCount == 1 ? "" : "s")."
             }
@@ -361,6 +428,122 @@ struct CSVExportSheet: View {
                 dateFmt.string(from: e.loggedAt),
                 timeFmt.string(from: e.loggedAt),
                 num(e.weightLbs)
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: - v2.2.3 strength + daily CSV builders
+
+    /// One row per LoggedSet. Every set carries its full session + exercise
+    /// ancestry so the two-level cascade rebuilds on import by grouping rows.
+    /// Zero-set exercises produce no rows (matches LogSessionSheet's save-time
+    /// skip behavior). Nil weight / reps render as empty cells.
+    private func buildStrengthSessionsCSV(from sessions: [StrengthSession]) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        timeFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        var lines: [String] = [
+            "session_date,session_time,routine_name,duration_minutes,exercise_name,exercise_order,set_number,weight_lbs,reps"
+        ]
+        for session in sessions {
+            let dStr = dateFmt.string(from: session.loggedAt)
+            let tStr = timeFmt.string(from: session.loggedAt)
+            let routineStr = csvEscape(session.routineName ?? "")
+            let durStr = session.durationMinutes.map(num) ?? ""
+            let exercises = session.exercises.sorted { $0.order < $1.order }
+            for ex in exercises {
+                let exNameEscaped = csvEscape(ex.name)
+                let exOrderStr = "\(ex.order)"
+                let sets = ex.sets.sorted { $0.setNumber < $1.setNumber }
+                for s in sets {
+                    let row = [
+                        dStr,
+                        tStr,
+                        routineStr,
+                        durStr,
+                        exNameEscaped,
+                        exOrderStr,
+                        "\(s.setNumber)",
+                        s.weightLbs.map(num) ?? "",
+                        s.reps.map { "\($0)" } ?? ""
+                    ].joined(separator: ",")
+                    lines.append(row)
+                }
+            }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    /// One row per RoutineExercise template line, carrying parent routine
+    /// fields. Routines with zero exercises produce no rows (consistent with
+    /// the strength-sessions flattening).
+    private func buildStrengthRoutinesCSV(from routines: [StrengthRoutine]) -> String {
+        let createdFmt = DateFormatter()
+        createdFmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        createdFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        var lines: [String] = [
+            "routine_name,routine_order,created_at,exercise_name,exercise_order,target_sets,target_reps,target_weight_lbs"
+        ]
+        for routine in routines {
+            let nameEscaped = csvEscape(routine.name)
+            let orderStr = "\(routine.order)"
+            let createdStr = createdFmt.string(from: routine.createdAt)
+            let exercises = routine.exercises.sorted { $0.order < $1.order }
+            for ex in exercises {
+                let row = [
+                    nameEscaped,
+                    orderStr,
+                    createdStr,
+                    csvEscape(ex.name),
+                    "\(ex.order)",
+                    ex.targetSets.map { "\($0)" } ?? "",
+                    ex.targetReps.map { "\($0)" } ?? "",
+                    ex.targetWeightLbs.map(num) ?? ""
+                ].joined(separator: ",")
+                lines.append(row)
+            }
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func buildRepEntriesCSV(from entries: [ExerciseRepEntry]) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm"
+        timeFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        var lines: [String] = ["date,time,kind,count"]
+        for e in entries {
+            let row = [
+                dateFmt.string(from: e.loggedAt),
+                timeFmt.string(from: e.loggedAt),
+                csvEscape(e.kind),
+                "\(e.count)"
+            ].joined(separator: ",")
+            lines.append(row)
+        }
+        return lines.joined(separator: "\n") + "\n"
+    }
+
+    private func buildStretchDaysCSV(from days: [StretchDay]) -> String {
+        let dateFmt = DateFormatter()
+        dateFmt.dateFormat = "yyyy-MM-dd"
+        dateFmt.locale = Locale(identifier: "en_US_POSIX")
+
+        var lines: [String] = ["date,stretched"]
+        for d in days {
+            let row = [
+                dateFmt.string(from: d.date),
+                d.stretched ? "true" : "false"
             ].joined(separator: ",")
             lines.append(row)
         }

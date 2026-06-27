@@ -4,11 +4,16 @@ import UniformTypeIdentifiers
 
 // MARK: - CSVImportSheet
 /// v2.0.1 — Inverse of CSVExportSheet. Restores food / water / weight history
-/// after a reinstall. APPEND-ONLY with an EMPTY-TABLE GUARD per type: each
-/// of FoodEntry / WaterEntry / WeightEntry must be empty (no non-soft-deleted
-/// rows) before its CSV will be accepted. There is no dedupe/merge — by
-/// design, since the user's usage contract is "only import into a fresh
-/// reinstall."
+/// after a reinstall. v2.2.3 extends coverage to the strength + daily-tracker
+/// tables: strength sessions (StrengthSession → LoggedExercise → LoggedSet),
+/// strength routines (StrengthRoutine → RoutineExercise), rep entries
+/// (ExerciseRepEntry — pushups / situps bursts), and stretch days (StretchDay).
+///
+/// APPEND-ONLY with an EMPTY-TABLE GUARD per type: each target table must be
+/// empty (no non-soft-deleted rows) before its CSV will be accepted. There is
+/// no dedupe/merge — by design, since the user's usage contract is "only
+/// import into a fresh reinstall." Empty routines (no exercise rows) and
+/// zero-set exercises are not exported, so they don't import either.
 ///
 /// Schemas mirror CSVExportSheet exactly:
 /// - food.csv:   date,time,meal,name,brand,source,servings,unit,calories,
@@ -56,7 +61,7 @@ struct CSVImportSheet: View {
                     }
                     .disabled(isImporting)
                 } footer: {
-                    Text("Restores data from food.csv / water.csv / weight.csv exports. Pick any subset. Each type can only be imported into an empty database — if entries of that type already exist, the file is skipped. Use this only on a freshly reinstalled app.")
+                    Text("Restores data from food / water / weight / strength sessions / strength routines / daily reps / stretch days CSV exports. Pick any subset. Each type can only be imported into an empty database — if entries of that type already exist, the file is skipped. Use this only on a freshly reinstalled app.")
                 }
 
                 if !results.isEmpty {
@@ -149,6 +154,14 @@ struct CSVImportSheet: View {
             await importWater(fileName: fileName, dataLines: dataLines)
         case .weight:
             await importWeight(fileName: fileName, dataLines: dataLines)
+        case .strengthSessions:
+            await importStrengthSessions(fileName: fileName, dataLines: dataLines)
+        case .strengthRoutines:
+            await importStrengthRoutines(fileName: fileName, dataLines: dataLines)
+        case .repEntries:
+            await importRepEntries(fileName: fileName, dataLines: dataLines)
+        case .stretchDays:
+            await importStretchDays(fileName: fileName, dataLines: dataLines)
         case .energy:
             append(.init(
                 fileName: fileName,
@@ -158,7 +171,7 @@ struct CSVImportSheet: View {
         case .unknown:
             append(.init(
                 fileName: fileName,
-                summary: "Unrecognized CSV header. Expected food, water, or weight export.",
+                summary: "Unrecognized CSV header. Expected food, water, weight, strength sessions, strength routines, daily reps, or stretch days export.",
                 color: .red
             ))
         }
@@ -170,7 +183,11 @@ struct CSVImportSheet: View {
 
     // MARK: - Kind detection
 
-    private enum FileKind { case food, water, weight, energy, unknown }
+    private enum FileKind {
+        case food, water, weight, energy
+        case strengthSessions, strengthRoutines, repEntries, stretchDays
+        case unknown
+    }
 
     /// Header-sniff. Filename is unreliable (user may rename); the first row
     /// of every export is a known string written by CSVExportSheet, so we
@@ -181,6 +198,10 @@ struct CSVImportSheet: View {
         if normalized == "date,time,amount_oz"         { return .water }
         if normalized == "date,time,weight_lbs"        { return .weight }
         if normalized.hasPrefix("date,activeenergykcal") { return .energy }
+        if normalized.hasPrefix("session_date,session_time") { return .strengthSessions }
+        if normalized.hasPrefix("routine_name,routine_order") { return .strengthRoutines }
+        if normalized == "date,time,kind,count"        { return .repEntries }
+        if normalized == "date,stretched"              { return .stretchDays }
         return .unknown
     }
 
@@ -342,6 +363,267 @@ struct CSVImportSheet: View {
                            imported: imported, malformed: malformed))
     }
 
+    // MARK: - v2.2.3 strength + daily importers
+
+    /// Imports flattened-by-set strength session rows. Groups rows into
+    /// sessions by (date, time, routine_name, duration_minutes) — these four
+    /// together effectively identify a single session at minute-precision.
+    /// Within a session, groups exercises by (exercise_name, exercise_order).
+    /// Set count under a given (session, exercise) is just rows in that group.
+    private func importStrengthSessions(fileName: String, dataLines: [String]) async {
+        if strengthSessionTableHasData() {
+            append(.init(
+                fileName: fileName,
+                summary: "Strength sessions already exist in this app. Import skipped — import only into a freshly reinstalled app.",
+                color: .orange
+            ))
+            return
+        }
+
+        struct ExerciseKey: Hashable { let name: String; let order: Int }
+        struct SessionKey: Hashable {
+            let date: String
+            let time: String
+            let routine: String   // "" when nil — kept as String for Hashable
+            let duration: String  // "" when nil
+        }
+        struct PendingSet {
+            let exKey: ExerciseKey
+            let setNumber: Int
+            let weightLbs: Double?
+            let reps: Int?
+        }
+
+        var sessionOrder: [SessionKey] = []
+        var sessionRows: [SessionKey: [PendingSet]] = [:]
+
+        var malformed = 0
+        for raw in dataLines {
+            let fields = parseCSVLine(raw)
+            // Columns: 0 session_date, 1 session_time, 2 routine_name,
+            //          3 duration_minutes, 4 exercise_name, 5 exercise_order,
+            //          6 set_number, 7 weight_lbs, 8 reps
+            guard fields.count >= 9 else { malformed += 1; continue }
+            let date = fields[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let time = fields[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !date.isEmpty, !time.isEmpty,
+                  parseDateTime(date: date, time: time) != nil else {
+                malformed += 1; continue
+            }
+            let routine = fields[2]
+            let duration = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
+            let exName = fields[4].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !exName.isEmpty else { malformed += 1; continue }
+            guard let exOrder = parseRequiredInt(fields[5]),
+                  let setNumber = parseRequiredInt(fields[6]) else {
+                malformed += 1; continue
+            }
+            let w = parseOptionalDouble(fields[7])
+            let r = parseOptionalInt(fields[8])
+
+            let sKey = SessionKey(date: date, time: time, routine: routine, duration: duration)
+            if sessionRows[sKey] == nil {
+                sessionOrder.append(sKey)
+                sessionRows[sKey] = []
+            }
+            sessionRows[sKey]!.append(PendingSet(
+                exKey: ExerciseKey(name: exName, order: exOrder),
+                setNumber: setNumber,
+                weightLbs: w,
+                reps: r
+            ))
+        }
+
+        var imported = 0
+        for sKey in sessionOrder {
+            guard let loggedAt = parseDateTime(date: sKey.date, time: sKey.time) else { continue }
+            let routineName = sKey.routine.isEmpty ? nil : sKey.routine
+            let durationMin: Double? = sKey.duration.isEmpty ? nil : Double(sKey.duration)
+            let session = StrengthSession(
+                loggedAt: loggedAt,
+                routineName: routineName,
+                durationMinutes: durationMin
+            )
+            context.insert(session)
+
+            // Group this session's pending sets by exercise key, preserving
+            // first-seen order so the rebuilt LoggedExercise list matches the
+            // original layout.
+            var exerciseOrder: [ExerciseKey] = []
+            var exerciseObjects: [ExerciseKey: LoggedExercise] = [:]
+            for row in sessionRows[sKey] ?? [] {
+                if exerciseObjects[row.exKey] == nil {
+                    let ex = LoggedExercise(name: row.exKey.name, order: row.exKey.order)
+                    ex.session = session
+                    context.insert(ex)
+                    exerciseObjects[row.exKey] = ex
+                    exerciseOrder.append(row.exKey)
+                }
+                let s = LoggedSet(
+                    weightLbs: row.weightLbs,
+                    reps: row.reps,
+                    setNumber: row.setNumber
+                )
+                s.exercise = exerciseObjects[row.exKey]
+                context.insert(s)
+            }
+            imported += 1
+        }
+        append(makeSummary(fileName: fileName, type: "strength session",
+                           imported: imported, malformed: malformed))
+    }
+
+    private func importStrengthRoutines(fileName: String, dataLines: [String]) async {
+        if strengthRoutineTableHasData() {
+            append(.init(
+                fileName: fileName,
+                summary: "Strength routines already exist in this app. Import skipped — import only into a freshly reinstalled app.",
+                color: .orange
+            ))
+            return
+        }
+
+        struct RoutineKey: Hashable {
+            let name: String
+            let order: Int
+            let createdAtStr: String
+        }
+        struct PendingExercise {
+            let name: String
+            let order: Int
+            let targetSets: Int?
+            let targetReps: Int?
+            let targetWeightLbs: Double?
+        }
+
+        var routineOrder: [RoutineKey] = []
+        var routineRows: [RoutineKey: [PendingExercise]] = [:]
+
+        var malformed = 0
+        for raw in dataLines {
+            let fields = parseCSVLine(raw)
+            // Columns: 0 routine_name, 1 routine_order, 2 created_at,
+            //          3 exercise_name, 4 exercise_order, 5 target_sets,
+            //          6 target_reps, 7 target_weight_lbs
+            guard fields.count >= 8 else { malformed += 1; continue }
+            let routineName = fields[0]
+            guard !routineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                malformed += 1; continue
+            }
+            guard let routineOrderNum = parseRequiredInt(fields[1]) else {
+                malformed += 1; continue
+            }
+            let createdAtStr = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            let exName = fields[3].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !exName.isEmpty else { malformed += 1; continue }
+            guard let exOrder = parseRequiredInt(fields[4]) else {
+                malformed += 1; continue
+            }
+
+            let key = RoutineKey(
+                name: routineName,
+                order: routineOrderNum,
+                createdAtStr: createdAtStr
+            )
+            if routineRows[key] == nil {
+                routineOrder.append(key)
+                routineRows[key] = []
+            }
+            routineRows[key]!.append(PendingExercise(
+                name: exName,
+                order: exOrder,
+                targetSets: parseOptionalInt(fields[5]),
+                targetReps: parseOptionalInt(fields[6]),
+                targetWeightLbs: parseOptionalDouble(fields[7])
+            ))
+        }
+
+        var imported = 0
+        for key in routineOrder {
+            let createdAt = parseRoutineCreatedAt(key.createdAtStr) ?? .now
+            let routine = StrengthRoutine(
+                name: key.name,
+                order: key.order,
+                createdAt: createdAt
+            )
+            context.insert(routine)
+            for pending in routineRows[key] ?? [] {
+                let ex = RoutineExercise(
+                    name: pending.name,
+                    targetSets: pending.targetSets,
+                    targetReps: pending.targetReps,
+                    targetWeightLbs: pending.targetWeightLbs,
+                    order: pending.order
+                )
+                ex.routine = routine
+                context.insert(ex)
+            }
+            imported += 1
+        }
+        append(makeSummary(fileName: fileName, type: "strength routine",
+                           imported: imported, malformed: malformed))
+    }
+
+    private func importRepEntries(fileName: String, dataLines: [String]) async {
+        if repEntryTableHasData() {
+            append(.init(
+                fileName: fileName,
+                summary: "Rep entries already exist in this app. Import skipped — import only into a freshly reinstalled app.",
+                color: .orange
+            ))
+            return
+        }
+        var imported = 0
+        var malformed = 0
+        for raw in dataLines {
+            let fields = parseCSVLine(raw)
+            // Columns: 0 date, 1 time, 2 kind, 3 count
+            guard fields.count >= 4 else { malformed += 1; continue }
+            guard let loggedAt = parseDateTime(date: fields[0], time: fields[1]) else {
+                malformed += 1; continue
+            }
+            let kind = fields[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !kind.isEmpty else { malformed += 1; continue }
+            guard let count = parseRequiredInt(fields[3]) else {
+                malformed += 1; continue
+            }
+            let entry = ExerciseRepEntry(kind: kind, count: count, loggedAt: loggedAt)
+            context.insert(entry)
+            imported += 1
+        }
+        append(makeSummary(fileName: fileName, type: "rep entry",
+                           imported: imported, malformed: malformed))
+    }
+
+    private func importStretchDays(fileName: String, dataLines: [String]) async {
+        if stretchDayTableHasData() {
+            append(.init(
+                fileName: fileName,
+                summary: "Stretch days already exist in this app. Import skipped — import only into a freshly reinstalled app.",
+                color: .orange
+            ))
+            return
+        }
+        var imported = 0
+        var malformed = 0
+        for raw in dataLines {
+            let fields = parseCSVLine(raw)
+            // Columns: 0 date, 1 stretched (true/false)
+            guard fields.count >= 2 else { malformed += 1; continue }
+            guard let day = parseDateOnly(fields[0]) else {
+                malformed += 1; continue
+            }
+            guard let stretched = parseBool(fields[1]) else {
+                malformed += 1; continue
+            }
+            let entry = StretchDay(date: day, stretched: stretched)
+            context.insert(entry)
+            imported += 1
+        }
+        append(makeSummary(fileName: fileName, type: "stretch day",
+                           imported: imported, malformed: malformed))
+    }
+
     // MARK: - Empty-table guards
 
     /// True if any non-soft-deleted FoodEntry exists. Uses a fetchLimit so we
@@ -366,6 +648,36 @@ struct CSVImportSheet: View {
         var d = FetchDescriptor<WeightEntry>(
             predicate: #Predicate<WeightEntry> { $0.pendingDeleteAt == nil }
         )
+        d.fetchLimit = 1
+        return ((try? context.fetch(d).count) ?? 0) > 0
+    }
+
+    private func strengthSessionTableHasData() -> Bool {
+        var d = FetchDescriptor<StrengthSession>(
+            predicate: #Predicate<StrengthSession> { $0.pendingDeleteAt == nil }
+        )
+        d.fetchLimit = 1
+        return ((try? context.fetch(d).count) ?? 0) > 0
+    }
+
+    /// StrengthRoutine has no soft-delete column; any row counts.
+    private func strengthRoutineTableHasData() -> Bool {
+        var d = FetchDescriptor<StrengthRoutine>()
+        d.fetchLimit = 1
+        return ((try? context.fetch(d).count) ?? 0) > 0
+    }
+
+    private func repEntryTableHasData() -> Bool {
+        var d = FetchDescriptor<ExerciseRepEntry>(
+            predicate: #Predicate<ExerciseRepEntry> { $0.pendingDeleteAt == nil }
+        )
+        d.fetchLimit = 1
+        return ((try? context.fetch(d).count) ?? 0) > 0
+    }
+
+    /// StretchDay has no soft-delete column; any row counts.
+    private func stretchDayTableHasData() -> Bool {
+        var d = FetchDescriptor<StretchDay>()
         d.fetchLimit = 1
         return ((try? context.fetch(d).count) ?? 0) > 0
     }
@@ -455,6 +767,54 @@ struct CSVImportSheet: View {
     private func emptyToNil(_ s: String) -> String? {
         let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Required Int: nil if empty or unparseable. Used for setNumber, count,
+    /// and exercise/routine order fields — caller treats nil as malformed.
+    private func parseRequiredInt(_ s: String) -> Int? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        return Int(trimmed)
+    }
+
+    /// Optional Int: nil for empty or unparseable. nil ≠ 0 — a blank target
+    /// reps / target sets cell becomes Int? = nil, never 0.
+    private func parseOptionalInt(_ s: String) -> Int? {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        return Int(trimmed)
+    }
+
+    /// Parses "true" / "false" (case-insensitive) plus the obvious aliases.
+    /// Returns nil on empty or unknown — caller treats nil as malformed.
+    private func parseBool(_ s: String) -> Bool? {
+        let t = s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if t.isEmpty { return nil }
+        if t == "true" || t == "1" || t == "yes" || t == "y" { return true }
+        if t == "false" || t == "0" || t == "no" || t == "n" { return false }
+        return nil
+    }
+
+    /// Single yyyy-MM-dd parser, normalized to startOfDay so the @Attribute(.unique)
+    /// on StretchDay.date matches the in-app construction pattern.
+    private func parseDateOnly(_ s: String) -> Date? {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let day = fmt.date(from: trimmed) else { return nil }
+        return Calendar.current.startOfDay(for: day)
+    }
+
+    /// Parses the single combined yyyy-MM-dd HH:mm:ss format used for
+    /// StrengthRoutine.createdAt. Falls back to nil on miss; importer then
+    /// substitutes .now (a routine without a parseable createdAt still
+    /// imports — the date is informational).
+    private func parseRoutineCreatedAt(_ s: String) -> Date? {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        fmt.locale = Locale(identifier: "en_US_POSIX")
+        return fmt.date(from: s.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     // MARK: - Summaries
